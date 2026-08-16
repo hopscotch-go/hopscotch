@@ -5,7 +5,7 @@
 //	      └── …                            ┘
 //
 // src dials every path head; each path is a dial-chain; dst dials every tail.
-// Launch via "diamond-50" (in-process) or "diamond-50 mesh" (50 OS processes).
+// Launch via "Diamond: 50 in-process" or "Diamond: 50 mesh" (50 OS processes).
 // Default size: 6×8 + src/dst = 50 nodes.
 //
 //	go run ./examples/diamond -width 6 -depth 8

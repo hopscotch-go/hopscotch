@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "foo",
+      "name": "Hub: bar",
       "type": "go",
       "request": "launch",
       "mode": "auto",
@@ -11,28 +11,15 @@
       "console": "integratedTerminal",
       "preLaunchTask": "bootstrap certs",
       "presentation": {
-        "group": "hopscotch",
-        "panel": "dedicated"
-      },
-      "args": ["--config", "examples/hub/foo.yaml"]
-    },
-    {
-      "name": "bar",
-      "type": "go",
-      "request": "launch",
-      "mode": "auto",
-      "program": "${workspaceFolder}",
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "preLaunchTask": "bootstrap certs",
-      "presentation": {
-        "group": "hopscotch",
-        "panel": "dedicated"
+        "hidden": true,
+        "group": "hub",
+        "panel": "dedicated",
+        "order": 11
       },
       "args": ["--config", "examples/hub/bar.yaml"]
     },
     {
-      "name": "baz",
+      "name": "Hub: baz",
       "type": "go",
       "request": "launch",
       "mode": "auto",
@@ -41,13 +28,32 @@
       "console": "integratedTerminal",
       "preLaunchTask": "bootstrap certs",
       "presentation": {
-        "group": "hopscotch",
-        "panel": "dedicated"
+        "hidden": true,
+        "group": "hub",
+        "panel": "dedicated",
+        "order": 12
       },
       "args": ["--config", "examples/hub/baz.yaml"]
     },
     {
-      "name": "foo (tun)",
+      "name": "Hub: foo",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "preLaunchTask": "bootstrap certs",
+      "presentation": {
+        "hidden": true,
+        "group": "hub",
+        "panel": "dedicated",
+        "order": 13
+      },
+      "args": ["--config", "examples/hub/foo.yaml"]
+    },
+    {
+      "name": "Hub: foo (tun)",
       "type": "go",
       "request": "launch",
       "mode": "exec",
@@ -57,41 +63,176 @@
       "console": "integratedTerminal",
       "preLaunchTask": "tun debug prep",
       "presentation": {
-        "group": "hopscotch-tun",
-        "panel": "dedicated"
+        "hidden": true,
+        "group": "hub",
+        "panel": "dedicated",
+        "order": 14
       },
       "args": ["--config", "examples/hub/foo.yaml", "--tun"]
     },
+
     {
-      "name": "chain-100",
+      "name": "Cycle: in-process",
       "type": "go",
       "request": "launch",
       "mode": "auto",
-      "program": "${workspaceFolder}/examples/chain",
+      "program": "${workspaceFolder}/examples/cycle",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "presentation": {
-        "group": "hopscotch",
-        "panel": "dedicated"
+        "group": "demos",
+        "panel": "dedicated",
+        "order": 4
       },
-      "args": ["-n", "100"]
+      "args": ["-hop-limit", "64", "-max-ttl", "24"]
     },
     {
-      "name": "diamond-50",
+      "name": "Cycle: bar",
       "type": "go",
       "request": "launch",
       "mode": "auto",
-      "program": "${workspaceFolder}/examples/diamond",
+      "program": "${workspaceFolder}",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "presentation": {
-        "group": "hopscotch",
-        "panel": "dedicated"
+        "hidden": true,
+        "group": "cycle",
+        "panel": "dedicated",
+        "order": 21
       },
-      "args": ["-width", "6", "-depth", "8"]
+      "args": ["--config", "examples/cycle/bar.yaml"]
     },
     {
-      "name": "diamond-50 mesh",
+      "name": "Cycle: baz",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": {
+        "hidden": true,
+        "group": "cycle",
+        "panel": "dedicated",
+        "order": 22
+      },
+      "args": ["--config", "examples/cycle/baz.yaml"]
+    },
+    {
+      "name": "Cycle: buzz",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": {
+        "hidden": true,
+        "group": "cycle",
+        "panel": "dedicated",
+        "order": 23
+      },
+      "args": ["--config", "examples/cycle/buzz.yaml"]
+    },
+    {
+      "name": "Cycle: bizz",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": {
+        "hidden": true,
+        "group": "cycle",
+        "panel": "dedicated",
+        "order": 24
+      },
+      "args": ["--config", "examples/cycle/bizz.yaml"]
+    },
+    {
+      "name": "Cycle: mid1",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": {
+        "hidden": true,
+        "group": "cycle",
+        "panel": "dedicated",
+        "order": 25
+      },
+      "args": ["--config", "examples/cycle/mid1.yaml"]
+    },
+    {
+      "name": "Cycle: mid2",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": {
+        "hidden": true,
+        "group": "cycle",
+        "panel": "dedicated",
+        "order": 26
+      },
+      "args": ["--config", "examples/cycle/mid2.yaml"]
+    },
+    {
+      "name": "Cycle: mid3",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": {
+        "hidden": true,
+        "group": "cycle",
+        "panel": "dedicated",
+        "order": 27
+      },
+      "args": ["--config", "examples/cycle/mid3.yaml"]
+    },
+    {
+      "name": "Cycle: blaz",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": {
+        "hidden": true,
+        "group": "cycle",
+        "panel": "dedicated",
+        "order": 28
+      },
+      "args": ["--config", "examples/cycle/blaz.yaml"]
+    },
+    {
+      "name": "Cycle: foo",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": {
+        "hidden": true,
+        "group": "cycle",
+        "panel": "dedicated",
+        "order": 29
+      },
+      "args": ["--config", "examples/cycle/foo.yaml"]
+    },
+
+    {
+      "name": "Diamond: 50 mesh",
       "type": "go",
       "request": "launch",
       "mode": "auto",
@@ -100,203 +241,80 @@
       "console": "integratedTerminal",
       "preLaunchTask": "diamond-50 prep",
       "presentation": {
-        "group": "hopscotch",
-        "panel": "dedicated"
+        "group": "demos",
+        "panel": "dedicated",
+        "order": 5
       }
     },
     {
-      "name": "cycle (all-in-one)",
+      "name": "Diamond: 50 in-process",
       "type": "go",
       "request": "launch",
       "mode": "auto",
-      "program": "${workspaceFolder}/examples/cycle",
+      "program": "${workspaceFolder}/examples/diamond",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "presentation": {
-        "group": "hopscotch",
-        "panel": "dedicated"
+        "group": "demos",
+        "panel": "dedicated",
+        "order": 6
       },
-      "args": ["-hop-limit", "64", "-max-ttl", "24"]
+      "args": ["-width", "6", "-depth", "8"]
     },
     {
-      "name": "cycle (force-loop keys)",
+      "name": "Chain: 100",
       "type": "go",
       "request": "launch",
       "mode": "auto",
-      "program": "${workspaceFolder}/examples/cycle",
+      "program": "${workspaceFolder}/examples/chain",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "presentation": {
-        "group": "hopscotch",
-        "panel": "dedicated"
+        "group": "demos",
+        "panel": "dedicated",
+        "order": 7
       },
-      "args": ["-force-loop", "-hop-limit", "32", "-max-ttl", "24"]
-    },
-    {
-      "name": "cycle/bar",
-      "type": "go",
-      "request": "launch",
-      "mode": "auto",
-      "program": "${workspaceFolder}",
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "presentation": {
-        "group": "hopscotch-cycle",
-        "panel": "dedicated"
-      },
-      "args": ["--config", "examples/cycle/bar.yaml"]
-    },
-    {
-      "name": "cycle/baz",
-      "type": "go",
-      "request": "launch",
-      "mode": "auto",
-      "program": "${workspaceFolder}",
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "presentation": {
-        "group": "hopscotch-cycle",
-        "panel": "dedicated"
-      },
-      "args": ["--config", "examples/cycle/baz.yaml"]
-    },
-    {
-      "name": "cycle/buzz",
-      "type": "go",
-      "request": "launch",
-      "mode": "auto",
-      "program": "${workspaceFolder}",
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "presentation": {
-        "group": "hopscotch-cycle",
-        "panel": "dedicated"
-      },
-      "args": ["--config", "examples/cycle/buzz.yaml"]
-    },
-    {
-      "name": "cycle/bizz",
-      "type": "go",
-      "request": "launch",
-      "mode": "auto",
-      "program": "${workspaceFolder}",
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "presentation": {
-        "group": "hopscotch-cycle",
-        "panel": "dedicated"
-      },
-      "args": ["--config", "examples/cycle/bizz.yaml"]
-    },
-    {
-      "name": "cycle/mid1",
-      "type": "go",
-      "request": "launch",
-      "mode": "auto",
-      "program": "${workspaceFolder}",
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "presentation": {
-        "group": "hopscotch-cycle",
-        "panel": "dedicated"
-      },
-      "args": ["--config", "examples/cycle/mid1.yaml"]
-    },
-    {
-      "name": "cycle/mid2",
-      "type": "go",
-      "request": "launch",
-      "mode": "auto",
-      "program": "${workspaceFolder}",
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "presentation": {
-        "group": "hopscotch-cycle",
-        "panel": "dedicated"
-      },
-      "args": ["--config", "examples/cycle/mid2.yaml"]
-    },
-    {
-      "name": "cycle/mid3",
-      "type": "go",
-      "request": "launch",
-      "mode": "auto",
-      "program": "${workspaceFolder}",
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "presentation": {
-        "group": "hopscotch-cycle",
-        "panel": "dedicated"
-      },
-      "args": ["--config", "examples/cycle/mid3.yaml"]
-    },
-    {
-      "name": "cycle/blaz",
-      "type": "go",
-      "request": "launch",
-      "mode": "auto",
-      "program": "${workspaceFolder}",
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "presentation": {
-        "group": "hopscotch-cycle",
-        "panel": "dedicated"
-      },
-      "args": ["--config", "examples/cycle/blaz.yaml"]
-    },
-    {
-      "name": "cycle/foo",
-      "type": "go",
-      "request": "launch",
-      "mode": "auto",
-      "program": "${workspaceFolder}",
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "presentation": {
-        "group": "hopscotch-cycle",
-        "panel": "dedicated"
-      },
-      "args": ["--config", "examples/cycle/foo.yaml"]
+      "args": ["-n", "100"]
     }
   ],
   "compounds": [
     {
-      "name": "foo → bar ← baz",
-      "configurations": ["bar", "baz", "foo"],
+      "name": "Hub: mesh",
+      "configurations": ["Hub: bar", "Hub: baz", "Hub: foo"],
       "preLaunchTask": "bootstrap certs",
       "stopAll": true,
       "presentation": {
-        "group": "hopscotch",
+        "group": "demos",
         "order": 1
       }
     },
     {
-      "name": "foo → bar ← baz (tun)",
-      "configurations": ["bar", "baz", "foo (tun)"],
+      "name": "Hub: mesh + tun",
+      "configurations": ["Hub: bar", "Hub: baz", "Hub: foo (tun)"],
       "preLaunchTask": "tun debug prep",
       "stopAll": true,
       "presentation": {
-        "group": "hopscotch-tun",
+        "group": "demos",
         "order": 2
       }
     },
     {
-      "name": "cycle mesh",
+      "name": "Cycle: mesh",
       "configurations": [
-        "cycle/bar",
-        "cycle/baz",
-        "cycle/buzz",
-        "cycle/bizz",
-        "cycle/mid1",
-        "cycle/mid2",
-        "cycle/mid3",
-        "cycle/blaz",
-        "cycle/foo"
+        "Cycle: bar",
+        "Cycle: baz",
+        "Cycle: buzz",
+        "Cycle: bizz",
+        "Cycle: mid1",
+        "Cycle: mid2",
+        "Cycle: mid3",
+        "Cycle: blaz",
+        "Cycle: foo"
       ],
       "preLaunchTask": "bootstrap cycle certs",
       "stopAll": true,
       "presentation": {
-        "group": "hopscotch-cycle",
+        "group": "demos",
         "order": 3
       }
     }

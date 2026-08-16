@@ -8,7 +8,7 @@
 //
 // Sessions are only the boot peer edges (isolated-machine pretence).
 //
-// Launch via "cycle mesh" (separate processes) or "cycle (all-in-one)" in launch.json.
+// Launch via "Cycle: mesh" (separate processes) or "Cycle: in-process" in launch.json.
 //
 //	go run ./examples/cycle -force-loop
 //	go run . traceroute --config examples/cycle/foo.yaml blaz

@@ -75,7 +75,7 @@ go run ./examples/chain
 
 `examples/diamond/` is a multi-path DAG: **src** fans out across `-width` parallel chains of `-depth` nodes each, which meet at **dst**. Default is `6×8 + src/dst = 50` nodes.
 
-**Real processes** (one `hopscotch` OS process per node): launch **diamond-50 mesh**, or:
+**Real processes** (one `hopscotch` OS process per node): launch **Diamond: 50 mesh**, or:
 
 ```bash
 go build -o hopscotch .
@@ -84,7 +84,7 @@ go run ./examples/diamond/mesh
 ./hopscotch ping --config examples/.local/diamond/src.yaml dst
 ```
 
-Logs are prefixed with the node name in one terminal. **diamond-50** is the same topology in a single process (faster bring-up).
+Logs are prefixed with the node name in one terminal. **Diamond: 50 in-process** is the same topology in a single process (faster bring-up).
 
 
 ## Cycle (ring + spur)
@@ -97,14 +97,14 @@ foo → bar → baz → buzz → bar
                  bizz → mid1 → mid2 → mid3 → blaz
 ```
 
-**Separate processes** (one terminal per node — preferred for reading logs): launch the **cycle mesh** compound in `.vscode/launch.json`. Then:
+**Separate processes** (one terminal per node — preferred for reading logs): launch **Cycle: mesh** in `.vscode/launch.json`. Then:
 
 ```bash
 ./hopscotch traceroute --config examples/cycle/foo.yaml blaz
 ./hopscotch ping --config examples/cycle/foo.yaml blaz
 ```
 
-**All-in-one** (single process): launch **cycle (all-in-one)**, or `go run ./examples/cycle`.
+**In-process** (single process): launch **Cycle: in-process**, or `go run ./examples/cycle`.
 
 
 ## Overlay TUN
