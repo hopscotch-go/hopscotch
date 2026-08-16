@@ -66,14 +66,13 @@ With that running, ping baz from foo (the command talks to foo’s control socke
 
 Each NodeID maps to a ULA (`fd00::/8`). `--tun` (or `tun: true` in YAML) creates a TUN and assigns it. Overlay packets ride QUIC datagrams when they fit, otherwise a unidirectional stream. Next hop is the session whose peer ULA equals the destination, otherwise the remaining neighbor with the closest ULA (XOR). One next hop, not a flood. Hop limit stops loops; expired packets get ICMPv6 Time Exceeded. TCP SYNs have MSS clamped to the overlay.
 
-One hopscotch per machine is the host overlay NIC (`gateway` defaults true): it installs an unscoped `fd00::/8` route and overlay DNS so ordinary programs resolve shortnames and send through the TUN.
+One hopscotch per machine is the host overlay NIC (`gateway` defaults true): it installs an unscoped `fd00::/8` route and overlay DNS so ordinary programs resolve `name.hopscotch` and send through the TUN.
 
 ```bash
-ping6 baz
-# or: ping baz.hopscotch
+ping6 baz.hopscotch
 ```
 
-Names are answered in-process (not forwarded): AAAA, and NODATA for A. On macOS the stub is `127.0.0.1` on an ephemeral UDP port plus `/etc/resolver` (`port` is written into the file). On Linux it is `fd00::53` via systemd-resolved on the TUN. The search domain is `hopscotch`, so `ping6 baz` becomes `baz.hopscotch`. `ca bootstrap` writes `examples/.local/hosts` as a seed of name → ULA. `--tun` needs root:
+Names are answered in-process (not forwarded): AAAA, and NODATA for A. On macOS the stub is `127.0.0.1` on an ephemeral UDP port plus `/etc/resolver/hopscotch` (the `port` is written into the file). That file is only for the `hopscotch` zone; it does not install a global search domain, so other VPN short names (Tailscale MagicDNS) keep working. On Linux it is `fd00::53` via systemd-resolved on the TUN, with search domain `hopscotch`. `ca bootstrap` writes `examples/.local/hosts` as a seed of name → ULA. `--tun` needs root:
 
 ```bash
 sudo ./hopscotch --config examples/hub/foo.yaml --tun

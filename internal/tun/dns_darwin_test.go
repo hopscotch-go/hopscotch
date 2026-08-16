@@ -17,6 +17,11 @@ func TestInstallDNSResolverFiles(t *testing.T) {
 	resolverDir = dir
 	defer func() { resolverDir = orig }()
 
+	legacy := filepath.Join(dir, "search."+identity.NameURIScheme)
+	if err := os.WriteFile(legacy, []byte("# hopscotch\nsearch hopscotch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	revert, err := InstallDNS("utun9", 49152)
 	if err != nil {
 		t.Fatal(err)
@@ -29,12 +34,8 @@ func TestInstallDNSResolverFiles(t *testing.T) {
 	if !strings.Contains(got, "nameserver 127.0.0.1") || !strings.Contains(got, "port 49152") {
 		t.Fatalf("%s", match)
 	}
-	search, err := os.ReadFile(filepath.Join(dir, "search."+identity.NameURIScheme))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(search), "search "+identity.NameURIScheme) {
-		t.Fatalf("%s", search)
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Fatal("legacy search file should be removed")
 	}
 	if err := revert(); err != nil {
 		t.Fatal(err)

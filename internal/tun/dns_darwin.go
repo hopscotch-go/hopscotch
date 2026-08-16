@@ -24,24 +24,17 @@ func InstallDNS(ifName string, dnsPort int) (func() error, error) {
 	if dnsPort > 0 && dnsPort != 53 {
 		match += fmt.Sprintf("port %d\n", dnsPort)
 	}
-	search := resolverHeader + "search " + zone + "\n"
 	matchPath := filepath.Join(resolverDir, zone)
-	searchPath := filepath.Join(resolverDir, "search."+zone)
+	// Older builds wrote /etc/resolver/search.hopscotch, which macOS
+	// treats as a global search domain. Unqualified names (tot, etc.)
+	// then go to the hopscotch stub and hang if it is down — and steal
+	// short names from Tailscale MagicDNS while it is up.
+	_ = removeResolverFile(filepath.Join(resolverDir, "search."+zone))
 	if err := os.WriteFile(matchPath, []byte(match), 0o644); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(searchPath, []byte(search), 0o644); err != nil {
-		_ = os.Remove(matchPath)
-		return nil, err
-	}
 	return func() error {
-		var first error
-		for _, p := range []string{matchPath, searchPath} {
-			if err := removeResolverFile(p); err != nil && first == nil {
-				first = err
-			}
-		}
-		return first
+		return removeResolverFile(matchPath)
 	}, nil
 }
 
