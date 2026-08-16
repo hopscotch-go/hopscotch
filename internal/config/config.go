@@ -15,25 +15,27 @@ import (
 
 // File is a node config as loaded from YAML. Paths are absolute.
 type File struct {
-	Identity string
-	CA       string
-	Cert     string
-	Control  string
-	Listen   []string
-	Peers    []peers.Peer
-	Tun      bool
-	Gateway  bool
+	Identity  string
+	CA        string
+	Cert      string
+	Control   string
+	Listen    []string
+	Peers     []peers.Peer
+	Tun       bool
+	Userspace bool
+	Gateway   bool
 }
 
 type rawFile struct {
-	Identity string     `yaml:"identity"`
-	CA       string     `yaml:"ca"`
-	Cert     string     `yaml:"cert"`
-	Control  string     `yaml:"control"`
-	Listen   stringList `yaml:"listen"`
-	Peers    []rawPeer  `yaml:"peers"`
-	Tun      bool       `yaml:"tun"`
-	Gateway  *bool      `yaml:"gateway"`
+	Identity  string     `yaml:"identity"`
+	CA        string     `yaml:"ca"`
+	Cert      string     `yaml:"cert"`
+	Control   string     `yaml:"control"`
+	Listen    stringList `yaml:"listen"`
+	Peers     []rawPeer  `yaml:"peers"`
+	Tun       bool       `yaml:"tun"`
+	Userspace bool       `yaml:"userspace"`
+	Gateway   *bool      `yaml:"gateway"`
 }
 
 type stringList []string
@@ -101,13 +103,14 @@ func Load(path string) (*File, error) {
 	}
 	base := filepath.Dir(abs)
 	out := &File{
-		Identity: resolve(base, raw.Identity),
-		CA:       resolve(base, raw.CA),
-		Cert:     resolve(base, raw.Cert),
-		Control:  resolve(base, raw.Control),
-		Listen:   append([]string(nil), raw.Listen...),
-		Tun:      raw.Tun,
-		Gateway:  true,
+		Identity:  resolve(base, raw.Identity),
+		CA:        resolve(base, raw.CA),
+		Cert:      resolve(base, raw.Cert),
+		Control:   resolve(base, raw.Control),
+		Listen:    append([]string(nil), raw.Listen...),
+		Tun:       raw.Tun,
+		Userspace: raw.Userspace,
+		Gateway:   true,
 	}
 	if raw.Gateway != nil {
 		out.Gateway = *raw.Gateway

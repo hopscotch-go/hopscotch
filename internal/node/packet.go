@@ -123,9 +123,10 @@ func (n *Node) tunLoop() {
 	}
 }
 
-// deliverTun taps then writes an IPv6 packet to the local TUN.
+// deliverTun taps then writes an IPv6 packet to the local TUN and userspace stack.
 func (n *Node) deliverTun(pkt []byte) {
 	n.tapPacket(pkt)
+	n.deliverStack(pkt)
 	n.mu.Lock()
 	d := n.tun
 	n.mu.Unlock()
@@ -165,9 +166,16 @@ func (n *Node) handleIPv6(from *session, pkt []byte) {
 		n.tapPacket(pkt)
 		n.mu.Lock()
 		d := n.tun
+		st := n.stack
 		n.mu.Unlock()
+		if st != nil {
+			st.Inject(pkt)
+		}
 		if d != nil {
 			_ = d.WritePacket(pkt)
+			return
+		}
+		if st != nil {
 			return
 		}
 		if reply, ok := icmpEchoReply(pkt); ok {

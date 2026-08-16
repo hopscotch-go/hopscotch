@@ -21,6 +21,7 @@ import (
 	"github.com/hopscotch-go/hopscotch/internal/backend"
 	"github.com/hopscotch-go/hopscotch/internal/endpoint"
 	"github.com/hopscotch-go/hopscotch/internal/identity"
+	"github.com/hopscotch-go/hopscotch/internal/netstack"
 	"github.com/hopscotch-go/hopscotch/internal/peers"
 	"github.com/hopscotch-go/hopscotch/internal/proto"
 	"github.com/hopscotch-go/hopscotch/internal/tun"
@@ -37,6 +38,7 @@ type Config struct {
 	CA         string // mesh CA cert PEM; trust any peer this CA signed
 	Control    string // unix socket for local commands (ping, traceroute)
 	Tun        bool   // kernel TUN
+	Userspace  bool   // gVisor userspace IPv6 stack (no root); enables DialTCP
 	Gateway    bool   // this TUN owns fd00::/8 and overlay DNS for the host
 	NoListen   bool   // if true, do not bind (pure dial-only; cannot be dialed back)
 	LogOverlay bool   // log every overlay nextHop forward
@@ -82,6 +84,7 @@ type Node struct {
 	dialers   map[string]backend.Dialer
 	mux       *backend.Mux
 	tun       tun.Device
+	stack     *netstack.Stack
 	dnsPC     net.PacketConn
 	hosts     map[string]net.IP
 
@@ -377,6 +380,12 @@ func (n *Node) Start() error {
 			return err
 		}
 	}
+	if n.cfg.Userspace {
+		if err := n.startUserspace(); err != nil {
+			n.Close()
+			return err
+		}
+	}
 
 	if len(n.peerAddrs()) > 0 {
 		go n.join()
@@ -399,11 +408,16 @@ func (n *Node) Close() {
 	n.sessions = make(map[identity.NodeID]*session)
 	t := n.tun
 	n.tun = nil
+	st := n.stack
+	n.stack = nil
 	n.mu.Unlock()
 	for _, s := range sessions {
 		if s.conn != nil {
 			_ = s.conn.CloseWithError(0, "bye")
 		}
+	}
+	if st != nil {
+		st.Close()
 	}
 	if t != nil {
 		_ = t.Close()

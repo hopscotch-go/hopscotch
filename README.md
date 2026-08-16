@@ -111,6 +111,16 @@ foo → bar → baz → buzz → bar
 
 Each NodeID maps to a ULA (`fd00::/8`). `--tun` (or `tun: true` in YAML) creates a TUN and assigns it. Overlay packets ride QUIC datagrams when they fit, otherwise a unidirectional stream. Next hop comes from a **hop-count distance-vector** table over live sessions (advertised on the control stream). No route → Destination Unreachable. Hop limit remains a backstop. TCP SYNs have MSS clamped to the overlay.
 
+### Userspace stack (no root)
+
+`--userspace` (or `userspace: true`) attaches a gVisor IPv6 stack bound to the node ULA. Outbound packets enter the same overlay forward path as TUN traffic. Use `Node.DialTCP` / `ListenTCP` for in-process TCP over the mesh without a kernel NIC or root.
+
+```bash
+./hopscotch --config examples/hub/foo.yaml --userspace
+```
+
+TUN and userspace can run together: the host uses the TUN; in-process dials use the stack.
+
 One hopscotch per machine is the host overlay NIC (`gateway` defaults true): it installs an unscoped `fd00::/8` route and overlay DNS so ordinary programs resolve `name.hopscotch` and send through the TUN.
 
 ```bash

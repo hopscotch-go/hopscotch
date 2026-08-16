@@ -47,6 +47,11 @@ and overlay DNS). Then ping6 baz is a normal hostname lookup.
 
   sudo ./hopscotch --config examples/hub/foo.yaml --tun
 
+With --userspace, a gVisor IPv6 stack binds the node ULA in-process
+(no root). Use DialTCP/ListenTCP over the overlay without a TUN.
+
+  ./hopscotch --config examples/hub/foo.yaml --userspace
+
   hopscotch ca init --key ca.key --cert ca.crt
   hopscotch ca sign --ca-key ca.key --ca-cert ca.crt --identity node.pem --out node.crt --name foo
   hopscotch --ca ca.crt --cert node.crt --identity node.pem --listen 127.0.0.1:4433
@@ -97,6 +102,7 @@ func main() {
 	caFile := flag.String("ca", "", "mesh CA certificate PEM")
 	certFile := flag.String("cert", "", "this node's CA-signed certificate PEM")
 	tunFlag := flag.Bool("tun", false, "bring up a TUN for overlay IPv6")
+	userspaceFlag := flag.Bool("userspace", false, "gVisor userspace IPv6 stack (DialTCP/ListenTCP; no root)")
 	gwFlag := flag.Bool("gateway", true, "this TUN is the host overlay NIC (fd00::/8 and overlay DNS); -gateway=false for extra nodes on the same machine")
 	flag.Usage = usage
 	flag.Parse()
@@ -111,6 +117,9 @@ func main() {
 	}
 	if *tunFlag {
 		ncfg.Tun = true
+	}
+	if *userspaceFlag {
+		ncfg.Userspace = true
 	}
 	gatewayOnCmdline := false
 	flag.Visit(func(f *flag.Flag) {
@@ -149,15 +158,16 @@ func nodeConfigFromFlags(configPath string, listens []string, peersFile, idFile,
 			return node.Config{}, err
 		}
 		return node.Config{
-			Listens:  f.Listen,
-			Peers:    f.Peers,
-			Identity: f.Identity,
-			CA:       f.CA,
-			Cert:     f.Cert,
-			Control:  f.Control,
-			Tun:      f.Tun,
-			Gateway:  f.Gateway,
-			Log:      log.Default(),
+			Listens:   f.Listen,
+			Peers:     f.Peers,
+			Identity:  f.Identity,
+			CA:        f.CA,
+			Cert:      f.Cert,
+			Control:   f.Control,
+			Tun:       f.Tun,
+			Userspace: f.Userspace,
+			Gateway:   f.Gateway,
+			Log:       log.Default(),
 		}, nil
 	}
 	if idFile == "" || caFile == "" || certFile == "" {

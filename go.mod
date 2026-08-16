@@ -8,9 +8,12 @@ require (
 	golang.org/x/net v0.56.0
 	golang.org/x/sys v0.47.0
 	gopkg.in/yaml.v3 v3.0.1
+	gvisor.dev/gvisor v0.0.0-20250807194038-c9af560a03d9
 )
 
 require (
+	github.com/google/btree v1.1.2 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	golang.org/x/crypto v0.54.0 // indirect
+	golang.org/x/time v0.7.0 // indirect
 )
