@@ -45,14 +45,14 @@ Startup logs `pubkey` (64 hex chars — that is what belongs in `peers[].pubkey`
 
 See [kademlia.md](kademlia.md) for the lookup. [docs/](docs/) has short notes on public keys vs overlay IPs and what QUIC does not do.
 
-## Three-node line
+## Three-node hub
 
-`examples/hub/` is **foo → bar → baz**. bar listens on `127.0.0.1:4434`; foo dials bar; bar dials baz on `127.0.0.1:4435`. QUIC sessions stay on those edges (learned FIND_NODE contacts are not auto-dialed). `.vscode/launch.json` starts bar and foo. Run baz in another terminal (or on a second machine: listen `udp:0.0.0.0:4434` and point bar’s `peers` at it).
+`examples/hub/` is **foo → bar ← baz**. bar listens on `127.0.0.1:4434`; foo and baz dial bar (neither listens). QUIC sessions stay on those edges (learned FIND_NODE contacts are not auto-dialed). `.vscode/launch.json` starts bar, baz, and foo. On a second machine, point baz’s `peers` at bar’s reachable address and run with `--tun` (gateway defaults true there).
 
 ```bash
 ./hopscotch ca bootstrap --dir examples/.local --node foo --node bar --node baz
-./hopscotch --config examples/hub/baz.yaml
 ./hopscotch --config examples/hub/bar.yaml
+./hopscotch --config examples/hub/baz.yaml
 ./hopscotch --config examples/hub/foo.yaml
 ```
 

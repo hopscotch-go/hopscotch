@@ -94,8 +94,8 @@ func TestLoadExampleHub(t *testing.T) {
 	if len(bar.Listen) != 1 || bar.Listen[0] != "udp:127.0.0.1:4434" {
 		t.Fatalf("listen %v", bar.Listen)
 	}
-	if len(bar.Peers) != 1 || bar.Peers[0].Addr != "udp:127.0.0.1:4435" {
-		t.Fatalf("bar peers %+v", bar.Peers)
+	if len(bar.Peers) != 0 {
+		t.Fatalf("bar should be hub-only, peers %+v", bar.Peers)
 	}
 	foo, err := Load(filepath.Join("..", "..", "examples", "hub", "foo.yaml"))
 	if err != nil {
@@ -123,14 +123,14 @@ func TestLoadExampleHub(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !baz.Gateway {
-		t.Fatal("baz gateway defaults true")
+	if baz.Gateway {
+		t.Fatal("baz is an extra node on this Mac")
 	}
-	if len(baz.Listen) != 1 || baz.Listen[0] != "udp:127.0.0.1:4435" {
-		t.Fatalf("baz listen %v", baz.Listen)
+	if len(baz.Listen) != 0 {
+		t.Fatalf("baz should be dial-only, listen %v", baz.Listen)
 	}
-	if len(baz.Peers) != 0 {
-		t.Fatalf("baz should be dialed, got peers %+v", baz.Peers)
+	if len(baz.Peers) != 1 || baz.Peers[0].Addr != "udp:127.0.0.1:4434" {
+		t.Fatalf("baz peers %+v", baz.Peers)
 	}
 }
 
