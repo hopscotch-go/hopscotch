@@ -282,18 +282,6 @@ func peerLabel(id identity.NodeID, names []string) string {
 	return strings.Join(names, ",") + " (" + id.Short() + ")"
 }
 
-func (n *Node) label(id identity.NodeID) string {
-	if id == n.id {
-		return peerLabel(id, n.names)
-	}
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if s := n.sessions[id]; s != nil {
-		return peerLabel(id, s.names)
-	}
-	return id.Short()
-}
-
 func (n *Node) PeerCount() int {
 	n.mu.Lock()
 	defer n.mu.Unlock()

@@ -396,10 +396,6 @@ func (n *Node) sendICMPError(from *session, pkt []byte, typ, code uint8, param u
 	_ = from.writePacket(reply)
 }
 
-func icmpPacketTooBig(pkt []byte, src net.IP, mtu int) []byte {
-	return icmpv6Error(pkt, src, icmpv6PacketTooBig, 0, uint32(mtu))
-}
-
 func icmpv6Error(pkt []byte, src net.IP, typ, code uint8, param uint32) []byte {
 	src = src.To16()
 	if src == nil || len(pkt) < ipv6HeaderLen || pkt[0]>>4 != 6 {

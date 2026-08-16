@@ -345,6 +345,10 @@ func TestICMPPacketTooBigSkipsICMPError(t *testing.T) {
 	}
 }
 
+func icmpPacketTooBig(pkt []byte, src net.IP, mtu int) []byte {
+	return icmpv6Error(pkt, src, icmpv6PacketTooBig, 0, uint32(mtu))
+}
+
 func TestPacketTooBigToTun(t *testing.T) {
 	foo, bar, baz := startHub(t)
 	defer foo.Close()

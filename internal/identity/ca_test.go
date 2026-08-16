@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
+	"math/big"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestCASignsAndVerifies(t *testing.T) {
@@ -69,7 +72,7 @@ func TestCARejectsSelfSigned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	self, err := TLSCert(nodeKey)
+	self, err := selfSignedTLSCert(nodeKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,6 +81,22 @@ func TestCARejectsSelfSigned(t *testing.T) {
 	if _, err := VerifyChain(self.Certificate, roots); err == nil {
 		t.Fatal("self-signed cert should not verify against mesh CA")
 	}
+}
+
+func selfSignedTLSCert(priv ed25519.PrivateKey) (tls.Certificate, error) {
+	pub := priv.Public().(ed25519.PublicKey)
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: priv}, nil
 }
 
 func TestInitCAFilesRefuseOverwrite(t *testing.T) {

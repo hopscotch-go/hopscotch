@@ -4,12 +4,10 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
 	"fmt"
 	"net"
-	"time"
 )
 
 const ALPN = "hopscotch"
@@ -41,16 +39,6 @@ func ParsePublicKey(s string) (ed25519.PublicKey, error) {
 
 func PublicHex(pub ed25519.PublicKey) string {
 	return hex.EncodeToString(pub)
-}
-
-func ParseHex(s string) (NodeID, error) {
-	var id NodeID
-	b, err := hex.DecodeString(s)
-	if err != nil || len(b) != 32 {
-		return id, fmt.Errorf("node id must be 64 hex chars")
-	}
-	copy(id[:], b)
-	return id, nil
 }
 
 // ULA is an RFC 4193 unique-local IPv6 address derived from NodeID.
@@ -103,29 +91,6 @@ func LoadOrCreate(path string) (ed25519.PrivateKey, error) {
 		return nil, err
 	}
 	return priv, nil
-}
-
-func TLSCert(priv ed25519.PrivateKey) (tls.Certificate, error) {
-	pub := priv.Public().(ed25519.PublicKey)
-	serial, err := randomSerial()
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-	tmpl := &x509.Certificate{
-		SerialNumber: serial,
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(10 * 365 * 24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-	return tls.Certificate{
-		Certificate: [][]byte{der},
-		PrivateKey:  priv,
-	}, nil
 }
 
 func PublicFromCerts(certs []*x509.Certificate) (ed25519.PublicKey, error) {

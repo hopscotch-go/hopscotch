@@ -5,7 +5,6 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
-	"net"
 	"os"
 )
 
@@ -36,14 +35,6 @@ func LoadKey(path string) (ed25519.PrivateKey, error) {
 		return nil, fmt.Errorf("%s: not ed25519", path)
 	}
 	return priv, nil
-}
-
-func ULAFromKeyFile(path string) (net.IP, error) {
-	id, err := IDFromKeyFile(path)
-	if err != nil {
-		return nil, err
-	}
-	return id.ULA(), nil
 }
 
 func IDFromKeyFile(path string) (NodeID, error) {
