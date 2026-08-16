@@ -1,0 +1,42 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "bootstrap certs",
+      "type": "shell",
+      "command": "${workspaceFolder}/.vscode/bootstrap-certs.sh",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared",
+        "showReuseMessage": false,
+        "clear": false
+      }
+    },
+    {
+      "label": "go: build (debug)",
+      "type": "shell",
+      "command": "go",
+      "args": ["build", "-gcflags=all=-N -l", "-o", "hopscotch", "."],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared",
+        "showReuseMessage": false,
+        "clear": false
+      }
+    },
+    {
+      "label": "tun debug prep",
+      "dependsOrder": "sequence",
+      "dependsOn": ["bootstrap certs", "go: build (debug)"],
+      "problemMatcher": []
+    }
+  ]
+}

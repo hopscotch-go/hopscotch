@@ -1,0 +1,7 @@
+identity: ../.local/baz.pem
+ca: ../.local/ca.crt
+cert: ../.local/baz.crt
+# gateway defaults true. On a second machine with --tun this is the host overlay NIC.
+# Locally, leave it as another process: set gateway: false (see bar.yaml).
+listen:
+  - udp:127.0.0.1:4435

@@ -1,0 +1,9 @@
+identity: ../.local/bar.pem
+ca: ../.local/ca.crt
+cert: ../.local/bar.crt
+control: ../.local/bar.sock
+gateway: false  # extra process on this host; do not assign this ULA on the TUN
+listen:
+  - udp:127.0.0.1:4434
+peers:
+  - udp:127.0.0.1:4435

@@ -1,0 +1,17 @@
+# Binaries
+/hopscotch
+__debug_bin*
+*.exe
+*.test
+*.out
+
+# Generated example-mesh keys and certs
+examples/.local/
+
+# Local lab deploy helper
+deploy-baz.sh
+
+# OS / editor
+.DS_Store
+*.swp
+*~

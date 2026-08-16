@@ -1,0 +1,8 @@
+identity: ../.local/foo.pem
+ca: ../.local/ca.crt
+cert: ../.local/foo.crt
+control: ../.local/foo.sock
+# tun: true  # overlay IPv6; --tun on the debugger compound
+# gateway defaults true: this TUN is the host overlay NIC
+peers:
+  - udp:127.0.0.1:4434

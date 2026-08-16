@@ -1,0 +1,73 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "foo",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "preLaunchTask": "bootstrap certs",
+      "presentation": {
+        "group": "hopscotch",
+        "panel": "dedicated"
+      },
+      "args": ["--config", "examples/hub/foo.yaml"]
+    },
+    {
+      "name": "bar",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "preLaunchTask": "bootstrap certs",
+      "presentation": {
+        "group": "hopscotch",
+        "panel": "dedicated"
+      },
+      "args": ["--config", "examples/hub/bar.yaml"]
+    },
+    {
+      "name": "foo (tun)",
+      "type": "go",
+      "request": "launch",
+      "mode": "exec",
+      "asRoot": true,
+      "program": "${workspaceFolder}/hopscotch",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "preLaunchTask": "tun debug prep",
+      "presentation": {
+        "group": "hopscotch-tun",
+        "panel": "dedicated"
+      },
+      "args": ["--config", "examples/hub/foo.yaml", "--tun"]
+    }
+  ],
+  "compounds": [
+    {
+      "name": "foo → bar → baz",
+      "configurations": ["bar", "foo"],
+      "preLaunchTask": "bootstrap certs",
+      "stopAll": true,
+      "presentation": {
+        "group": "hopscotch",
+        "order": 1
+      }
+    },
+    {
+      "name": "foo → bar → baz (tun)",
+      "configurations": ["bar", "foo (tun)"],
+      "preLaunchTask": "tun debug prep",
+      "stopAll": true,
+      "presentation": {
+        "group": "hopscotch-tun",
+        "order": 2
+      }
+    }
+  ]
+}
