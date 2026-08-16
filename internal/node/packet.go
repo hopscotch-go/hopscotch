@@ -186,7 +186,14 @@ func (n *Node) handleIPv6(from *session, pkt []byte) {
 		}
 		return
 	}
-	n.noteOverlayForward(from, next, pkt, hopAfter)
+	if n.cfg.LogOverlay {
+		fromLabel := "tun"
+		if from != nil {
+			fromLabel = peerLabel(from.id, from.names)
+		}
+		n.log.Printf("overlay fwd dst=%s from=%s to=%s hlim=%d",
+			dst, fromLabel, peerLabel(next.id, next.names), hopAfter)
+	}
 	if err := next.writePacket(pkt); err != nil {
 		n.sendPacketTooBig(from, pkt, err)
 		var tooBig *quic.DatagramTooLargeError

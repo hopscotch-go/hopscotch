@@ -91,10 +91,6 @@ type Node struct {
 	echoWait map[string]echoWait
 	pktTap   chan []byte
 
-	flowMu       sync.Mutex
-	flowSight    map[uint64]flowSight
-	overlayLoops atomic.Uint64
-
 	routeMu sync.Mutex
 	routes  map[string]ribEntry // ULA string → next hop NodeID + metric
 }

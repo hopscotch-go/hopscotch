@@ -46,15 +46,3 @@ func TestResolverULA(t *testing.T) {
 		t.Fatal("node ULA is not resolver")
 	}
 }
-
-func TestCloserULA(t *testing.T) {
-	target := net.ParseIP("fd00::aa")
-	near := net.ParseIP("fd00::ab")
-	far := net.ParseIP("fd00::ff")
-	if !CloserULA(target, near, far) {
-		t.Fatal("near should win")
-	}
-	if CloserULA(target, far, near) {
-		t.Fatal("far should lose")
-	}
-}

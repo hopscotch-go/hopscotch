@@ -1,6 +1,6 @@
 // Session graph with a ring and a long spur. Overlay uses hop-count
-// distance-vector over live sessions (not XOR), so the spur is preferred
-// as the shorter path to blaz when bar↔buzz exists:
+// distance-vector over live sessions, so the spur is preferred as the
+// shorter path to blaz when bar↔buzz exists:
 //
 //	foo → bar → baz → buzz → bar
 //	                   ↓
@@ -10,14 +10,13 @@
 //
 // Launch via "Cycle: mesh" (separate processes) or "Cycle: in-process" in launch.json.
 //
-//	go run ./examples/cycle -force-loop
+//	go run ./examples/cycle
 //	go run . traceroute --config examples/cycle/foo.yaml blaz
 //	go run . ping --config examples/cycle/foo.yaml blaz
 package main
 
 import (
 	"context"
-	"crypto/ed25519"
 	"flag"
 	"fmt"
 	"io"
@@ -41,7 +40,6 @@ func main() {
 	dir := flag.String("dir", filepath.Join("examples", ".local", "cycle"), "cert/config dir")
 	verbose := flag.Bool("v", false, "print raw per-node hopscotch logs")
 	logOverlay := flag.Bool("log-overlay", false, "log every overlay nextHop forward")
-	forceLoop := flag.Bool("force-loop", false, "regenerate certs until buzz XOR prefers bar (loop risk)")
 	statusEvery := flag.Duration("status", 10*time.Second, "status interval (0 to disable)")
 	hopLimit := flag.Uint("hop-limit", 64, "IPv6 Hop Limit for the overlay ICMP probe")
 	maxTTL := flag.Int("max-ttl", 24, "max Hop Limit for built-in overlay traceroute")
@@ -50,11 +48,11 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	names := []string{"foo", "bar", "baz", "buzz", "bizz", "mid1", "mid2", "mid3", "blaz"}
-	const spurHops = 8 // foo→bar→baz→buzz→bizz→mid1→mid2→mid3→blaz (session path; dial may shorten)
+	const spurHops = 8 // foo→bar→baz→buzz→bizz→mid1→mid2→mid3→blaz
 	if err := os.MkdirAll(*dir, 0o755); err != nil {
 		fatal("mkdir", "err", err)
 	}
-	if err := ensureCerts(*dir, names, *forceLoop); err != nil {
+	if err := ensureCerts(*dir, names); err != nil {
 		fatal("certs", "err", err)
 	}
 	ca := filepath.Join(*dir, "ca.crt")
@@ -66,7 +64,7 @@ func main() {
 		}
 	}()
 
-	start := func(name string, _ bool, peerAddrs ...string) *node.Node {
+	start := func(name string, peerAddrs ...string) *node.Node {
 		cfg := node.Config{
 			Identity:   filepath.Join(*dir, name+".pem"),
 			Cert:       filepath.Join(*dir, name+".crt"),
@@ -98,50 +96,38 @@ func main() {
 	}
 
 	slog.Info("boot", "phase", "ring", "shape", "bar→baz→buzz→bar; foo→bar")
-	bar := start("bar", true)
-	foo := start("foo", false, bar.AdvertiseAddr())
+	bar := start("bar")
+	foo := start("foo", bar.AdvertiseAddr())
 	waitPeers(foo, 1, 15*time.Second)
 	waitPeers(bar, 1, 15*time.Second)
-	baz := start("baz", true, bar.AdvertiseAddr())
+	baz := start("baz", bar.AdvertiseAddr())
 	waitPeers(baz, 1, 15*time.Second)
 	waitPeers(bar, 2, 15*time.Second)
-	buzz := start("buzz", true, baz.AdvertiseAddr(), bar.AdvertiseAddr())
+	buzz := start("buzz", baz.AdvertiseAddr(), bar.AdvertiseAddr())
 	waitPeers(buzz, 2, 15*time.Second)
 	waitPeers(bar, 3, 15*time.Second)
 	slog.Info("rib snapshot", "phase", "ring up")
 	logMeshRoutes(all)
 
 	slog.Info("boot", "phase", "spur", "shape", "buzz→bizz→mid1→mid2→mid3→blaz")
-	bizz := start("bizz", true, buzz.AdvertiseAddr())
+	bizz := start("bizz", buzz.AdvertiseAddr())
 	waitPeers(bizz, 1, 15*time.Second)
 	waitPeers(buzz, 3, 15*time.Second)
-	mid1 := start("mid1", true, bizz.AdvertiseAddr())
+	mid1 := start("mid1", bizz.AdvertiseAddr())
 	waitPeers(mid1, 1, 15*time.Second)
 	waitPeers(bizz, 2, 15*time.Second)
-	mid2 := start("mid2", true, mid1.AdvertiseAddr())
+	mid2 := start("mid2", mid1.AdvertiseAddr())
 	waitPeers(mid2, 1, 15*time.Second)
 	waitPeers(mid1, 2, 15*time.Second)
-	mid3 := start("mid3", true, mid2.AdvertiseAddr())
+	mid3 := start("mid3", mid2.AdvertiseAddr())
 	waitPeers(mid3, 1, 15*time.Second)
 	waitPeers(mid2, 2, 15*time.Second)
-	blaz := start("blaz", true, mid3.AdvertiseAddr())
+	blaz := start("blaz", mid3.AdvertiseAddr())
 	waitPeers(blaz, 1, 15*time.Second)
 	waitPeers(mid3, 2, 15*time.Second)
 	waitRoute(foo, blaz.ID().ULA(), 10*time.Second)
 	slog.Info("rib snapshot", "phase", "spur converged")
 	logMeshRoutes(all)
-
-	barPrefersBaz := identity.CloserULA(blaz.ID().ULA(), baz.ID().ULA(), buzz.ID().ULA())
-	buzzPrefersBar := !identity.CloserULA(blaz.ID().ULA(), bizz.ID().ULA(), bar.ID().ULA())
-	loopRisk := barPrefersBaz && buzzPrefersBar
-	preferBar := "baz"
-	if !barPrefersBaz {
-		preferBar = "buzz"
-	}
-	preferBuzz := "bar"
-	if !buzzPrefersBar {
-		preferBuzz = "bizz"
-	}
 
 	fooYAML := filepath.Join(*dir, "foo.yaml")
 	if err := os.WriteFile(fooYAML, []byte(
@@ -166,14 +152,6 @@ func main() {
 		"blaz_peers", blaz.PeerCount(),
 		"foo_metric_blaz", foo.RouteMetric(blaz.ID().ULA()),
 		"control", fooYAML,
-	)
-	slog.Info("legacy xor toward blaz",
-		"at_bar_from", "foo",
-		"bar_prefer", preferBar,
-		"at_buzz_from", "baz",
-		"buzz_prefer", preferBuzz,
-		"loop_risk", loopRisk,
-		"note", "XOR is discovery-only now; overlay uses hop-count DV",
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -219,18 +197,6 @@ func main() {
 
 	probeOverlay(foo, blaz, uint8(*hopLimit), spurHops)
 
-	var loops uint64
-	for _, n := range all {
-		loops += n.OverlayLoopCount()
-	}
-	slog.Info("overlay loop detections",
-		"total", loops,
-		"buzz", buzz.OverlayLoopCount(),
-		"bar", bar.OverlayLoopCount(),
-		"baz", baz.OverlayLoopCount(),
-		"note", "count of same-edge forwards with decreasing Hop Limit",
-	)
-
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	slog.Info("running",
@@ -250,10 +216,6 @@ func main() {
 			slog.Info("shutdown")
 			return
 		case <-tick:
-			var l uint64
-			for _, n := range all {
-				l += n.OverlayLoopCount()
-			}
 			slog.Info("status",
 				"foo_peers", foo.PeerCount(),
 				"bar_peers", bar.PeerCount(),
@@ -263,7 +225,6 @@ func main() {
 				"mid3_peers", mid3.PeerCount(),
 				"blaz_peers", blaz.PeerCount(),
 				"foo_metric_blaz", foo.RouteMetric(blaz.ID().ULA()),
-				"overlay_loops", l,
 			)
 			logMeshRoutes(all)
 		}
@@ -297,64 +258,9 @@ func logMeshRoutes(nodes []*node.Node) {
 	}
 }
 
-func ensureCerts(dir string, names []string, forceLoop bool) error {
-	const maxAttempts = 80
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		if forceLoop && attempt > 1 {
-			for _, name := range names {
-				_ = os.Remove(filepath.Join(dir, name+".pem"))
-				_ = os.Remove(filepath.Join(dir, name+".crt"))
-			}
-		}
-		slog.Info("boot", "phase", "certs", "nodes", len(names), "dir", dir, "attempt", attempt)
-		if err := identity.BootstrapDir(dir, names); err != nil {
-			return err
-		}
-		if !forceLoop {
-			return nil
-		}
-		barULA, err := ulaFromPEM(filepath.Join(dir, "bar.pem"))
-		if err != nil {
-			return err
-		}
-		bazULA, err := ulaFromPEM(filepath.Join(dir, "baz.pem"))
-		if err != nil {
-			return err
-		}
-		buzzULA, err := ulaFromPEM(filepath.Join(dir, "buzz.pem"))
-		if err != nil {
-			return err
-		}
-		bizzULA, err := ulaFromPEM(filepath.Join(dir, "bizz.pem"))
-		if err != nil {
-			return err
-		}
-		blazULA, err := ulaFromPEM(filepath.Join(dir, "blaz.pem"))
-		if err != nil {
-			return err
-		}
-		// Loop path foo→bar→baz→buzz→bar→… needs:
-		// - at bar (from foo): prefer baz over buzz
-		// - at buzz (from baz): prefer bar over bizz
-		barPrefersBaz := identity.CloserULA(blazULA, bazULA, buzzULA)
-		buzzPrefersBar := !identity.CloserULA(blazULA, bizzULA, barULA)
-		if barPrefersBaz && buzzPrefersBar {
-			slog.Info("force-loop", "ok", true, "attempt", attempt, "bar_next", "baz", "buzz_next", "bar")
-			return nil
-		}
-		slog.Info("force-loop", "ok", false, "attempt", attempt,
-			"bar_prefers_baz", barPrefersBaz, "buzz_prefers_bar", buzzPrefersBar)
-	}
-	return fmt.Errorf("force-loop: no loop-risk keying after %d attempts", maxAttempts)
-}
-
-func ulaFromPEM(path string) (net.IP, error) {
-	priv, err := identity.LoadKey(path)
-	if err != nil {
-		return nil, err
-	}
-	pub := priv.Public().(ed25519.PublicKey)
-	return identity.IDFromPublic(pub).ULA(), nil
+func ensureCerts(dir string, names []string) error {
+	slog.Info("boot", "phase", "certs", "nodes", len(names), "dir", dir)
+	return identity.BootstrapDir(dir, names)
 }
 
 func probeOverlay(foo, blaz *node.Node, hopLimit uint8, shortestHops int) {

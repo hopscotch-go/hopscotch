@@ -129,8 +129,6 @@ On each node, for destination ULA `D`:
 
 **Hop Limit:** when the packet arrived from a peer, if Hop Limit ≤ 1, send ICMPv6 Time Exceeded; else decrement. Backstop only — DV + split horizon is the loop prevention.
 
-**Loop detector:** same ingress→egress edge with a *lower* Hop Limit logs `overlay loop` (`internal/node/loop.go`).
-
 ### Hub walk
 
 On foo (RIB: baz → via bar, metric 2) → bar → baz (local).
@@ -191,7 +189,7 @@ Status like `connected=8 routes=12` means eight live sessions and twelve known o
 | DNS works, `ping6` blackholes | No RIB entry; hop limit; partition |
 | `hopscotch ping` works, traceroute fails | Flood vs RIB; routes not converged yet |
 | traceroute `dest_unreach` | No route at that hop |
-| `overlay loop` logs | Same edge re-used with decreasing Hop Limit |
+| Time Exceeded on a short path | Hop Limit too low, or stale RIB before withdraw |
 
 ---
 
@@ -215,7 +213,6 @@ go run ./examples/cycle
 |---|---|
 | Overlay forward + hop limit + unreachable | `internal/node/packet.go` |
 | Distance-vector RIB + `routes` ads | `internal/node/route.go` |
-| Overlay loop detection | `internal/node/loop.go` |
 | Overlay traceroute | `internal/node/traceroute.go` |
 | Named echo flood | `internal/node/echo.go` |
 | Session establish / control dispatch | `internal/node/node.go` |

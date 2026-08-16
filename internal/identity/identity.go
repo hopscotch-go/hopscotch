@@ -1,7 +1,6 @@
 package identity
 
 import (
-	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -86,21 +85,6 @@ func ResolverULA() net.IP {
 func IsResolverULA(ip net.IP) bool {
 	got := ip.To16()
 	return got != nil && got.Equal(ResolverULA())
-}
-
-// CloserULA reports whether a is XOR-closer to target than b, using
-// the 16-byte IPv6 values.
-func CloserULA(target, a, b net.IP) bool {
-	ta, aa, ba := target.To16(), a.To16(), b.To16()
-	if ta == nil || aa == nil || ba == nil {
-		return false
-	}
-	var da, db [16]byte
-	for i := 0; i < 16; i++ {
-		da[i] = ta[i] ^ aa[i]
-		db[i] = ta[i] ^ ba[i]
-	}
-	return bytes.Compare(da[:], db[:]) < 0
 }
 
 func LoadOrCreate(path string) (ed25519.PrivateKey, error) {
