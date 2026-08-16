@@ -79,7 +79,7 @@ Names are answered in-process (not forwarded): AAAA, and NODATA for A. On macOS 
 sudo ./hopscotch --config examples/hub/foo.yaml --tun
 ```
 
-The TUN debugger config runs `dlv` via `sudo` (`asRoot`). Touch ID is the integrated terminal.
+The TUN debugger config runs `dlv` via `sudo` (`asRoot`). To approve that with Touch ID in the integrated terminal, [enable Touch ID for sudo](https://derflounder.wordpress.com/2017/11/17/enabling-touch-id-authorization-for-sudo-on-macos-high-sierra/).
 
 foo is the host overlay NIC (`--tun`, gateway default true). Extra hopscotch processes on the same machine stay `gateway: false` so their ULAs are not local. They answer ICMP echo in-process. A second machine running baz with `--tun` owns `fd00::/8` there; `ping6 foo` and `ping6 bar` enter that TUN.
 
