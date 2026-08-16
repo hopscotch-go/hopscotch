@@ -1,18 +1,18 @@
-// Session graph with a ring and a long spur — without strict XOR progress,
-// greedy nextHop can circle the ring:
+// Session graph with a ring and a long spur. Overlay uses hop-count
+// distance-vector over live sessions (not XOR), so the spur is preferred
+// as the shorter path to blaz when bar↔buzz exists:
 //
 //	foo → bar → baz → buzz → bar
 //	                   ↓
 //	                 bizz → mid1 → mid2 → mid3 → blaz
 //
-// Nodes use NoDialCloser: only the boot-time peer edges exist (pretend each
-// node is on an isolated machine). Overlay cannot shortcut foo→mid2.
+// Sessions are only the boot peer edges (isolated-machine pretence).
 //
-// Launch via "cycle" in launch.json.
+// Launch via "cycle mesh" (separate processes) or "cycle (all-in-one)" in launch.json.
 //
 //	go run ./examples/cycle -force-loop
-//	go run . traceroute --config examples/.local/cycle/foo.yaml blaz
-//	go run . ping --config examples/.local/cycle/foo.yaml blaz
+//	go run . traceroute --config examples/cycle/foo.yaml blaz
+//	go run . ping --config examples/cycle/foo.yaml blaz
 package main
 
 import (
@@ -68,15 +68,14 @@ func main() {
 
 	start := func(name string, _ bool, peerAddrs ...string) *node.Node {
 		cfg := node.Config{
-			Identity:     filepath.Join(*dir, name+".pem"),
-			Cert:         filepath.Join(*dir, name+".crt"),
-			CA:           ca,
-			Network:      "udp",
-			Listen:       "127.0.0.1:0",
-			Gateway:      false,
-			NoDialCloser: true, // isolated-machine pretence: only boot peers get sessions
-			LogOverlay:   *logOverlay,
-			Log:          log.New(io.Discard, "", 0),
+			Identity:   filepath.Join(*dir, name+".pem"),
+			Cert:       filepath.Join(*dir, name+".crt"),
+			CA:         ca,
+			Network:    "udp",
+			Listen:     "127.0.0.1:0",
+			Gateway:    false,
+			LogOverlay: *logOverlay,
+			Log:        log.New(io.Discard, "", 0),
 		}
 		if *verbose || *logOverlay {
 			cfg.Log = log.New(os.Stderr, name+" ", log.LstdFlags)
@@ -109,6 +108,8 @@ func main() {
 	buzz := start("buzz", true, baz.AdvertiseAddr(), bar.AdvertiseAddr())
 	waitPeers(buzz, 2, 15*time.Second)
 	waitPeers(bar, 3, 15*time.Second)
+	slog.Info("rib snapshot", "phase", "ring up")
+	logMeshRoutes(all)
 
 	slog.Info("boot", "phase", "spur", "shape", "buzz→bizz→mid1→mid2→mid3→blaz")
 	bizz := start("bizz", true, buzz.AdvertiseAddr())
@@ -126,6 +127,9 @@ func main() {
 	blaz := start("blaz", true, mid3.AdvertiseAddr())
 	waitPeers(blaz, 1, 15*time.Second)
 	waitPeers(mid3, 2, 15*time.Second)
+	waitRoute(foo, blaz.ID().ULA(), 10*time.Second)
+	slog.Info("rib snapshot", "phase", "spur converged")
+	logMeshRoutes(all)
 
 	barPrefersBaz := identity.CloserULA(blaz.ID().ULA(), baz.ID().ULA(), buzz.ID().ULA())
 	buzzPrefersBar := !identity.CloserULA(blaz.ID().ULA(), bizz.ID().ULA(), bar.ID().ULA())
@@ -151,7 +155,7 @@ func main() {
 		"ring", "bar→baz→buzz→bar",
 		"spur", "buzz→bizz→mid1→mid2→mid3→blaz",
 		"session_hops_min", spurHops,
-		"note", "NoDialCloser: no overlay shortcuts; only boot peer sessions",
+		"note", "DV routes over boot peer sessions only",
 	)
 	slog.Info("ready",
 		"foo_peers", foo.PeerCount(),
@@ -160,17 +164,16 @@ func main() {
 		"bizz_peers", bizz.PeerCount(),
 		"mid3_peers", mid3.PeerCount(),
 		"blaz_peers", blaz.PeerCount(),
+		"foo_metric_blaz", foo.RouteMetric(blaz.ID().ULA()),
 		"control", fooYAML,
 	)
-	slog.Info("xor toward blaz",
+	slog.Info("legacy xor toward blaz",
 		"at_bar_from", "foo",
-		"bar_candidates", []string{"baz", "buzz"},
 		"bar_prefer", preferBar,
 		"at_buzz_from", "baz",
-		"buzz_candidates", []string{"bar", "bizz"},
 		"buzz_prefer", preferBuzz,
 		"loop_risk", loopRisk,
-		"note", "naive XOR would loop here; strict progress + dial-closer should not",
+		"note", "XOR is discovery-only now; overlay uses hop-count DV",
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -185,7 +188,7 @@ func main() {
 			"hops", got.Hops,
 			"rtt", got.RTT.Round(time.Microsecond),
 			"path", strings.Join(got.Path, "→"),
-			"note", "fan-out; not overlay XOR",
+			"note", "fan-out; not overlay DV",
 		)
 	}
 
@@ -211,7 +214,7 @@ func main() {
 				"rtt", h.RTT.Round(time.Microsecond),
 			)
 		}
-		slog.Info("overlay traceroute", "reached", trace.Reach, "note", "repeats would mean a cycle; dest_unreach means stuck without progress")
+		slog.Info("overlay traceroute", "reached", trace.Reach, "note", "hop-count DV path; dest_unreach means no RIB entry yet")
 	}
 
 	probeOverlay(foo, blaz, uint8(*hopLimit), spurHops)
@@ -259,12 +262,38 @@ func main() {
 				"mid1_peers", mid1.PeerCount(),
 				"mid3_peers", mid3.PeerCount(),
 				"blaz_peers", blaz.PeerCount(),
-				"xor_bar", preferBar,
-				"xor_buzz", preferBuzz,
-				"loop_risk", loopRisk,
+				"foo_metric_blaz", foo.RouteMetric(blaz.ID().ULA()),
 				"overlay_loops", l,
 			)
+			logMeshRoutes(all)
 		}
+	}
+}
+
+func logMeshRoutes(nodes []*node.Node) {
+	ulaName := make(map[string]string, len(nodes))
+	for _, n := range nodes {
+		name := "node"
+		if ns := n.Names(); len(ns) > 0 {
+			name = ns[0]
+		}
+		ulaName[n.ID().ULA().String()] = name
+	}
+	for _, n := range nodes {
+		name := "node"
+		if ns := n.Names(); len(ns) > 0 {
+			name = ns[0]
+		}
+		routes := n.Routes()
+		parts := make([]string, 0, len(routes))
+		for _, r := range routes {
+			dest := ulaName[r.DestIP]
+			if dest == "" {
+				dest = r.Dest
+			}
+			parts = append(parts, fmt.Sprintf("%s→%s(%d)", dest, r.Next, r.Metric))
+		}
+		slog.Info("rib", "node", name, "routes", len(routes), "table", strings.Join(parts, " "))
 	}
 }
 
@@ -339,7 +368,7 @@ func probeOverlay(foo, blaz *node.Node, hopLimit uint8, shortestHops int) {
 		"to", "blaz",
 		"hop_limit", hopLimit,
 		"session_spur_hops", shortestHops,
-		"note", "NoDialCloser: peer-only greedy walk; expect the spur (not foo→mid*)",
+		"note", "hop-count DV over peer sessions",
 	)
 	if err := dev.Inject(req); err != nil {
 		slog.Error("overlay inject", "err", err)
@@ -348,7 +377,7 @@ func probeOverlay(foo, blaz *node.Node, hopLimit uint8, shortestHops int) {
 	select {
 	case <-time.After(3 * time.Second):
 		slog.Warn("overlay probe", "result", "timeout",
-			"hint", "greedy XOR may be circling; TE may also fail to return — check overlay_loops + traceroute")
+			"hint", "check RouteMetric / traceroute; routes may still be converging")
 	case pkt := <-dev.Recv():
 		if len(pkt) < 41 {
 			slog.Warn("overlay probe", "result", "short_packet", "len", len(pkt))
@@ -371,7 +400,7 @@ func probeOverlay(foo, blaz *node.Node, hopLimit uint8, shortestHops int) {
 			slog.Warn("overlay probe",
 				"result", "dest_unreach",
 				"code", pkt[41],
-				"note", "no XOR-progress neighbor (and dial-closer did not help in time)",
+				"note", "no RIB entry for destination",
 			)
 		default:
 			slog.Info("overlay probe", "result", "other_icmp", "type", pkt[40])
@@ -393,6 +422,20 @@ func waitPeers(n *node.Node, want int, d time.Duration) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	fatal("wait peers", "names", n.Names(), "want", want, "got", n.PeerCount())
+}
+
+func waitRoute(n *node.Node, dst net.IP, d time.Duration) {
+	if n.RouteMetric(dst) > 0 {
+		return
+	}
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if n.RouteMetric(dst) > 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	fatal("wait route", "names", n.Names(), "dst", dst.String(), "metric", n.RouteMetric(dst))
 }
 
 func ipv6ICMPEcho(src, dst net.IP, hop uint8) []byte {

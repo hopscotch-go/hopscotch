@@ -179,14 +179,10 @@ func (n *Node) handleIPv6(from *session, pkt []byte) {
 	}
 	pkt = clampTCPMSS(pkt, tcpMSS)
 	next := n.nextHop(dst, from)
-	if next == nil && !n.cfg.NoDialCloser {
-		n.ensureCloserSessions(dst, from)
-		next = n.nextHop(dst, from)
-	}
 	if next == nil {
 		n.sendICMPError(from, pkt, icmpv6DestUnreach, icmpCodeNoRoute, 0)
 		if n.cfg.LogOverlay {
-			n.log.Printf("overlay no route dst=%s (no XOR-progress neighbor)", dst)
+			n.log.Printf("overlay no route dst=%s", dst)
 		}
 		return
 	}
@@ -271,54 +267,20 @@ func (n *Node) dnsReply(pkt []byte) []byte {
 	return udp6(dst, src, dport, sport, body)
 }
 
-// nextHop picks an overlay forward target among live sessions.
-// Priority:
-//  1. exact ULA match
-//  2. peer XOR-closer to dst than this node (strict self-progress)
-//  3. peer XOR-closer to dst than the ingress peer (progress vs from)
-//  4. if originating here (from == nil): closest neighbor (first hop)
-//  5. if NoDialCloser: closest neighbor anyway (peer-graph walk; no DHT dial)
-//
-// (2)–(3) prevent session-graph cycles when dial-on-demand can open shortcuts.
-// (5) is for isolated/peer-only meshes: without dialing, greedy is the only
-// way to walk a long spur; Hop Limit + loop detection bound adversarial rings.
+// nextHop picks an overlay forward target from the distance-vector RIB
+// (hop count over live sessions). Falls back to an exact ULA session match
+// if the table has not converged yet. Never forwards back to ingress.
 func (n *Node) nextHop(dst net.IP, from *session) *session {
-	selfULA := n.id.ULA()
-	var exact, bestSelf, bestFrom, bestAny *session
+	if s := n.routeNextHop(dst); s != nil && s != from {
+		return s
+	}
 	for _, s := range n.sessionList() {
 		if s == from {
 			continue
 		}
-		u := s.id.ULA()
-		if u.Equal(dst) {
-			exact = s
-			break
+		if s.id.ULA().Equal(dst) {
+			return s
 		}
-		if bestAny == nil || identity.CloserULA(dst, u, bestAny.id.ULA()) {
-			bestAny = s
-		}
-		if identity.CloserULA(dst, u, selfULA) {
-			if bestSelf == nil || identity.CloserULA(dst, u, bestSelf.id.ULA()) {
-				bestSelf = s
-			}
-		}
-		if from != nil && identity.CloserULA(dst, u, from.id.ULA()) {
-			if bestFrom == nil || identity.CloserULA(dst, u, bestFrom.id.ULA()) {
-				bestFrom = s
-			}
-		}
-	}
-	if exact != nil {
-		return exact
-	}
-	if bestSelf != nil {
-		return bestSelf
-	}
-	if bestFrom != nil {
-		return bestFrom
-	}
-	if from == nil || n.cfg.NoDialCloser {
-		return bestAny
 	}
 	return nil
 }

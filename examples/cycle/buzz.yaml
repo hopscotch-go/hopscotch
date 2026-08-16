@@ -1,0 +1,10 @@
+identity: ../.local/cycle/buzz.pem
+ca: ../.local/cycle/ca.crt
+cert: ../.local/cycle/buzz.crt
+control: ../.local/cycle/buzz.sock
+gateway: false
+listen:
+  - udp:127.0.0.1:4503
+peers:
+  - udp:127.0.0.1:4502
+  - udp:127.0.0.1:4501

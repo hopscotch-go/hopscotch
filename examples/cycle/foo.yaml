@@ -1,0 +1,7 @@
+identity: ../.local/cycle/foo.pem
+ca: ../.local/cycle/ca.crt
+cert: ../.local/cycle/foo.crt
+control: ../.local/cycle/foo.sock
+gateway: false
+peers:
+  - udp:127.0.0.1:4501

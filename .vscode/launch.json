@@ -77,7 +77,7 @@
       "args": ["-n", "100"]
     },
     {
-      "name": "diamond",
+      "name": "diamond-50",
       "type": "go",
       "request": "launch",
       "mode": "auto",
@@ -88,10 +88,24 @@
         "group": "hopscotch",
         "panel": "dedicated"
       },
-      "args": ["-width", "8", "-depth", "12"]
+      "args": ["-width", "6", "-depth", "8"]
     },
     {
-      "name": "cycle",
+      "name": "diamond-50 mesh",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/examples/diamond/mesh",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "preLaunchTask": "diamond-50 prep",
+      "presentation": {
+        "group": "hopscotch",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "name": "cycle (all-in-one)",
       "type": "go",
       "request": "launch",
       "mode": "auto",
@@ -117,6 +131,132 @@
         "panel": "dedicated"
       },
       "args": ["-force-loop", "-hop-limit", "32", "-max-ttl", "24"]
+    },
+    {
+      "name": "cycle/bar",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": {
+        "group": "hopscotch-cycle",
+        "panel": "dedicated"
+      },
+      "args": ["--config", "examples/cycle/bar.yaml"]
+    },
+    {
+      "name": "cycle/baz",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": {
+        "group": "hopscotch-cycle",
+        "panel": "dedicated"
+      },
+      "args": ["--config", "examples/cycle/baz.yaml"]
+    },
+    {
+      "name": "cycle/buzz",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": {
+        "group": "hopscotch-cycle",
+        "panel": "dedicated"
+      },
+      "args": ["--config", "examples/cycle/buzz.yaml"]
+    },
+    {
+      "name": "cycle/bizz",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": {
+        "group": "hopscotch-cycle",
+        "panel": "dedicated"
+      },
+      "args": ["--config", "examples/cycle/bizz.yaml"]
+    },
+    {
+      "name": "cycle/mid1",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": {
+        "group": "hopscotch-cycle",
+        "panel": "dedicated"
+      },
+      "args": ["--config", "examples/cycle/mid1.yaml"]
+    },
+    {
+      "name": "cycle/mid2",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": {
+        "group": "hopscotch-cycle",
+        "panel": "dedicated"
+      },
+      "args": ["--config", "examples/cycle/mid2.yaml"]
+    },
+    {
+      "name": "cycle/mid3",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": {
+        "group": "hopscotch-cycle",
+        "panel": "dedicated"
+      },
+      "args": ["--config", "examples/cycle/mid3.yaml"]
+    },
+    {
+      "name": "cycle/blaz",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": {
+        "group": "hopscotch-cycle",
+        "panel": "dedicated"
+      },
+      "args": ["--config", "examples/cycle/blaz.yaml"]
+    },
+    {
+      "name": "cycle/foo",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": {
+        "group": "hopscotch-cycle",
+        "panel": "dedicated"
+      },
+      "args": ["--config", "examples/cycle/foo.yaml"]
     }
   ],
   "compounds": [
@@ -138,6 +278,26 @@
       "presentation": {
         "group": "hopscotch-tun",
         "order": 2
+      }
+    },
+    {
+      "name": "cycle mesh",
+      "configurations": [
+        "cycle/bar",
+        "cycle/baz",
+        "cycle/buzz",
+        "cycle/bizz",
+        "cycle/mid1",
+        "cycle/mid2",
+        "cycle/mid3",
+        "cycle/blaz",
+        "cycle/foo"
+      ],
+      "preLaunchTask": "bootstrap cycle certs",
+      "stopAll": true,
+      "presentation": {
+        "group": "hopscotch-cycle",
+        "order": 3
       }
     }
   ]

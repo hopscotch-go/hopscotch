@@ -1,6 +1,6 @@
-# Keys: SSH vs mesh vs Kademlia
+# Keys: SSH vs mesh
 
-Same object (a public key). Three jobs.
+Same object (a public key). Different jobs.
 
 ## SSH
 
@@ -12,10 +12,11 @@ The public key is the **peer identity**. Overlay IPs (`100.x`, `fd7a:…`) are l
 
 ## hopscotch
 
-The public key *is* how you compute the address in ID space:
+The public key *is* how you compute the overlay address:
 
 ```
 NodeID = SHA-256(pubkey)
+ULA    = fd00::/8 bits from NodeID
 ```
 
-FIND_NODE talks about NodeIDs. The underlay `ip:port` is only a contact hint so QUIC can dial. If that hint goes stale, lookup runs again.
+You reach someone by dialing a configured underlay `peers` address (QUIC + mesh CA). Overlay packets then follow the distance-vector table over live sessions. There is no DHT lookup for NodeIDs.

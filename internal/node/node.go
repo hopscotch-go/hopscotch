@@ -21,7 +21,6 @@ import (
 	"github.com/hopscotch-go/hopscotch/internal/backend"
 	"github.com/hopscotch-go/hopscotch/internal/endpoint"
 	"github.com/hopscotch-go/hopscotch/internal/identity"
-	"github.com/hopscotch-go/hopscotch/internal/kademlia"
 	"github.com/hopscotch-go/hopscotch/internal/peers"
 	"github.com/hopscotch-go/hopscotch/internal/proto"
 	"github.com/hopscotch-go/hopscotch/internal/tun"
@@ -39,10 +38,9 @@ type Config struct {
 	Control    string // unix socket for local commands (ping, traceroute)
 	Tun        bool   // kernel TUN
 	Gateway    bool   // this TUN owns fd00::/8 and overlay DNS for the host
-	NoListen     bool // if true, do not bind (pure dial-only; cannot be dialed back)
-	NoDialCloser bool // if true, never dial Kademlia contacts for overlay (session graph stays peer-only)
-	LogOverlay   bool // log every overlay nextHop forward
-	Log          *log.Logger
+	NoListen   bool // if true, do not bind (pure dial-only; cannot be dialed back)
+	LogOverlay bool // log every overlay nextHop forward
+	Log        *log.Logger
 }
 
 type session struct {
@@ -66,7 +64,6 @@ type Node struct {
 	tlsCert     tls.Certificate
 	caPool      *x509.CertPool
 	quicConf    *quic.Config
-	table       *kademlia.Table
 	peers       []peers.Peer
 	pinByAddr   map[string]ed25519.PublicKey
 	listenSpecs []endpoint.Endpoint
@@ -98,7 +95,8 @@ type Node struct {
 	flowSight    map[uint64]flowSight
 	overlayLoops atomic.Uint64
 
-	lookupCloserAt map[string]time.Time
+	routeMu sync.Mutex
+	routes  map[string]ribEntry // ULA string → next hop NodeID + metric
 }
 
 func New(cfg Config) (*Node, error) {
@@ -121,7 +119,7 @@ func New(cfg Config) (*Node, error) {
 		specs = append(specs, ep)
 	}
 	// Every node binds an ephemeral UDP port unless NoListen is set, so
-	// dial-on-demand can open a session to the destination ULA (exact match).
+	// peers can dial back (bootstrapping and reconnection).
 	if len(specs) == 0 && !cfg.NoListen {
 		ep, err := endpoint.Parse("127.0.0.1:0", cfg.Network)
 		if err != nil {
@@ -212,7 +210,6 @@ func New(cfg Config) (*Node, error) {
 		id:          id,
 		tlsCert:     cert,
 		caPool:      caPool,
-		table:       kademlia.NewTable(id),
 		peers:       plist,
 		pinByAddr:   pin,
 		listenSpecs: specs,
@@ -224,6 +221,7 @@ func New(cfg Config) (*Node, error) {
 		dialing:     make(map[string]bool),
 		echoWait:    make(map[string]echoWait),
 		hosts:       make(map[string]net.IP),
+		routes:      make(map[string]ribEntry),
 		quicConf: &quic.Config{
 			KeepAlivePeriod:       5 * time.Second,
 			MaxIdleTimeout:        2 * time.Minute,
@@ -458,7 +456,6 @@ func (n *Node) acceptLoop() {
 func (n *Node) join() {
 	addrs := n.peerAddrs()
 	backoff := time.Second
-	var didLookup bool
 	for n.ctx.Err() == nil {
 		failed := 0
 		for _, addr := range addrs {
@@ -471,10 +468,6 @@ func (n *Node) join() {
 			}
 		}
 		if failed == 0 {
-			if !didLookup {
-				n.lookup(n.id)
-				didLookup = true
-			}
 			backoff = time.Second
 			if !n.sleep(time.Second) {
 				return
@@ -679,7 +672,6 @@ func (n *Node) establish(conn *quic.Conn, weDialed bool, expect ed25519.PublicKe
 		n.log.Printf("replacing session %s", peerLabel(pid, peerNames))
 	}
 
-	n.table.Insert(kademlia.Contact{ID: pid, Addrs: contactAddrs(adv, sessAddr)})
 	role := "inbound"
 	if weDialed {
 		role = "dialed"
@@ -691,17 +683,8 @@ func (n *Node) establish(conn *quic.Conn, weDialed bool, expect ed25519.PublicKe
 	go n.readDatagramLoop(sess)
 	go n.readUniStreamLoop(sess)
 	go n.overlayStreamLoop(sess)
+	n.onSessionUp(sess)
 	return sess, nil
-}
-
-func contactAddrs(advertise []string, sessAddr string) []string {
-	if len(advertise) > 0 {
-		return advertise
-	}
-	if sessAddr != "" {
-		return []string{sessAddr}
-	}
-	return nil
 }
 
 func (n *Node) readLoop(s *session) {
@@ -712,6 +695,7 @@ func (n *Node) readLoop(s *session) {
 			delete(n.sessions, s.id)
 		}
 		n.mu.Unlock()
+		n.onSessionDown(s)
 		n.log.Printf("disconnected %s", peerLabel(s.id, s.names))
 	}()
 
@@ -723,11 +707,11 @@ func (n *Node) readLoop(s *session) {
 		switch msg.Type {
 		case "ping":
 			_ = n.write(s, proto.Message{Type: "pong", RPC: msg.RPC})
-		case "find_node":
-			n.handleFindNode(s, msg)
 		case "echo":
 			n.handleEcho(s, msg)
-		case "pong", "find_nodes", "echo_ok", "echo_err":
+		case "routes":
+			n.handleRoutes(s, msg)
+		case "pong", "echo_ok", "echo_err":
 			if msg.Type == "echo_ok" || msg.Type == "echo_err" {
 				n.completeEcho(msg)
 				break
@@ -747,115 +731,6 @@ func (n *Node) readLoop(s *session) {
 	}
 }
 
-func (n *Node) handleFindNode(s *session, msg proto.Message) {
-	target, err := identity.ParseHex(msg.Target)
-	if err != nil {
-		n.log.Printf("find_node from %s: bad target", peerLabel(s.id, s.names))
-		return
-	}
-	contacts := n.replyContacts(target)
-	n.log.Printf("FIND_NODE %s from %s → %d contacts", n.label(target), peerLabel(s.id, s.names), len(contacts))
-	_ = n.write(s, proto.Message{Type: "find_nodes", RPC: msg.RPC, Contacts: contacts})
-}
-
-func (n *Node) replyContacts(target identity.NodeID) []proto.Contact {
-	closest := n.table.Closest(target, kademlia.K)
-	out := make([]proto.Contact, 0, len(closest)+1)
-	out = append(out, proto.Contact{ID: n.id.Hex(), Addrs: n.advertise})
-	for _, c := range closest {
-		out = append(out, proto.Contact{ID: c.ID.Hex(), Addrs: c.Addrs})
-	}
-	return out
-}
-
-func (n *Node) lookup(target identity.NodeID) []kademlia.Contact {
-	n.log.Printf("lookup %s", n.label(target))
-	queried := make(map[identity.NodeID]bool)
-	queried[n.id] = true
-
-	shortlist := n.table.Closest(target, kademlia.K)
-	changed := true
-	for changed {
-		changed = false
-		batch := make([]kademlia.Contact, 0, kademlia.Alpha)
-		for _, c := range shortlist {
-			if queried[c.ID] {
-				continue
-			}
-			batch = append(batch, c)
-			if len(batch) == kademlia.Alpha {
-				break
-			}
-		}
-		if len(batch) == 0 {
-			break
-		}
-		for _, c := range batch {
-			queried[c.ID] = true
-			got, err := n.queryFindNode(c, target)
-			if err != nil {
-				if errors.Is(err, errNoSession) {
-					continue
-				}
-				n.log.Printf("FIND_NODE via %s: %v", n.label(c.ID), err)
-				n.table.Remove(c.ID)
-				continue
-			}
-			for _, next := range got {
-				if next.ID == n.id || len(next.Addrs) == 0 || n.allSelfAddrs(next.Addrs) {
-					continue
-				}
-				if _, ok := n.table.Get(next.ID); !ok {
-					n.log.Printf("learned %s at %s (xor-closest path)", next.ID.Short(), strings.Join(next.Addrs, ","))
-					changed = true
-				}
-				n.table.Insert(next)
-			}
-		}
-		shortlist = n.table.Closest(target, kademlia.K)
-	}
-
-	return n.table.Closest(target, kademlia.K)
-}
-
-func (n *Node) queryFindNode(c kademlia.Contact, target identity.NodeID) ([]kademlia.Contact, error) {
-	s := n.session(c.ID)
-	if s == nil {
-		return nil, errNoSession
-	}
-	rpc := n.rpcSeq.Add(1)
-	ch := make(chan proto.Message, 1)
-	s.pendMu.Lock()
-	s.pending[rpc] = ch
-	s.pendMu.Unlock()
-	defer func() {
-		s.pendMu.Lock()
-		delete(s.pending, rpc)
-		s.pendMu.Unlock()
-	}()
-
-	if err := n.write(s, proto.Message{Type: "find_node", RPC: rpc, Target: target.Hex()}); err != nil {
-		return nil, err
-	}
-
-	ctx, cancel := context.WithTimeout(n.ctx, 5*time.Second)
-	defer cancel()
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case msg := <-ch:
-		var out []kademlia.Contact
-		for _, pc := range msg.Contacts {
-			id, err := identity.ParseHex(pc.ID)
-			if err != nil {
-				continue
-			}
-			out = append(out, kademlia.Contact{ID: id, Addrs: canonicalAddrs(pc.Addrs)})
-		}
-		return out, nil
-	}
-}
-
 func (n *Node) write(s *session, m proto.Message) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -863,18 +738,16 @@ func (n *Node) write(s *session, m proto.Message) error {
 }
 
 func (n *Node) maintainLoop() {
-	refresh := time.NewTicker(60 * time.Second)
-	defer refresh.Stop()
+	routes := time.NewTicker(routeRefresh)
+	defer routes.Stop()
 	status := time.NewTicker(10 * time.Second)
 	defer status.Stop()
 	for {
 		select {
 		case <-n.ctx.Done():
 			return
-		case <-refresh.C:
-			if n.table.Size() > 0 {
-				n.lookup(n.id)
-			}
+		case <-routes.C:
+			n.advertiseRoutes()
 		case <-status.C:
 			n.logStatus()
 		}
@@ -882,23 +755,22 @@ func (n *Node) maintainLoop() {
 }
 
 func (n *Node) logStatus() {
-	contacts := n.table.Contacts()
 	n.mu.Lock()
 	nsess := len(n.sessions)
+	sessions := make([]*session, 0, nsess)
+	for _, s := range n.sessions {
+		sessions = append(sessions, s)
+	}
 	n.mu.Unlock()
-	n.log.Printf("status table=%d connected=%d", len(contacts), nsess)
-	for _, c := range contacts {
-		n.mu.Lock()
-		s := n.sessions[c.ID]
-		n.mu.Unlock()
-		state := "contact"
-		label := c.ID.Short()
-		if s != nil {
-			state = "connected"
-			label = peerLabel(c.ID, s.names)
-		}
-		n.log.Printf("  %s  %-11s  %s  bucket=%d",
-			label, state, strings.Join(c.Addrs, ","), kademlia.BucketIndex(n.id, c.ID))
+	n.routeMu.Lock()
+	nroutes := len(n.routes)
+	n.routeMu.Unlock()
+	n.log.Printf("status connected=%d routes=%d", nsess, nroutes)
+	for _, r := range n.Routes() {
+		n.log.Printf("  route  %-8s via %-8s metric=%d", r.Dest, r.Next, r.Metric)
+	}
+	for _, s := range sessions {
+		n.log.Printf("  %s  connected  %s", peerLabel(s.id, s.names), s.addr)
 	}
 }
 
@@ -975,14 +847,3 @@ func canonicalAddrs(in []string) []string {
 	return out
 }
 
-func (n *Node) allSelfAddrs(addrs []string) bool {
-	if len(addrs) == 0 {
-		return false
-	}
-	for _, a := range addrs {
-		if !n.isSelfAddr(a) {
-			return false
-		}
-	}
-	return true
-}

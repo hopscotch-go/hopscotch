@@ -24,6 +24,9 @@ func TestHubStarNextHop(t *testing.T) {
 	defer baz.Close()
 
 	dest := baz.ID().ULA()
+	if !foo.waitRoute(dest, 3*time.Second) {
+		t.Fatal("foo has no route to baz")
+	}
 	hop := foo.nextHop(dest, nil)
 	if hop == nil || hop.id != bar.ID() {
 		t.Fatalf("foo next hop %v", hop)
@@ -31,6 +34,9 @@ func TestHubStarNextHop(t *testing.T) {
 	fromFoo := bar.session(foo.ID())
 	if fromFoo == nil {
 		t.Fatal("bar missing foo session")
+	}
+	if !bar.waitRoute(dest, 3*time.Second) {
+		t.Fatal("bar has no route to baz")
 	}
 	hop = bar.nextHop(dest, fromFoo)
 	if hop == nil || hop.id != baz.ID() {

@@ -6,7 +6,7 @@ Node identity is an ed25519 key; NodeID is SHA-256 of the public key. Overlay IP
 
 Membership is a mesh CA. Every node presents a CA-signed certificate on the QUIC handshake; self-signed peers are rejected.
 
-A node joins by dialing hops listed as `peers` in its config (or `--peers`). After that, FIND_NODE walks the XOR metric. There is no peer-list gossip.
+A node joins by dialing hops listed as `peers` in its config (or `--peers`). Overlay paths are learned by hop-count distance-vector ads over those sessions. There is no DHT.
 
 ```bash
 go build -o hopscotch .
@@ -43,11 +43,11 @@ Startup logs `pubkey` (64 hex chars — that is what belongs in `peers[].pubkey`
 
 `--name` is written into the cert as a URI SAN (`hopscotch:foo`). Repeat it for aliases on the same key. After TLS, every node that trusts `ca.crt` sees the same names. Do not issue the same name on two different keys. Keep `ca.key` offline; nodes only need `ca.crt`.
 
-See [kademlia.md](kademlia.md) for the lookup. [docs/routing.md](docs/routing.md) traces overlay packets and named ping hop-by-hop. [docs/](docs/) also has short notes on public keys vs overlay IPs and what QUIC does not do.
+See [docs/routing.md](docs/routing.md) for overlay packets and named ping hop-by-hop. [docs/](docs/) also has short notes on public keys vs overlay IPs and what QUIC does not do.
 
 ## Three-node hub
 
-`examples/hub/` is **foo → bar ← baz**. bar listens on `127.0.0.1:4434`; foo and baz dial bar (neither listens). QUIC sessions stay on those edges (learned FIND_NODE contacts are not auto-dialed). `.vscode/launch.json` starts bar, baz, and foo. On a second machine, point baz’s `peers` at bar’s reachable address and run with `--tun` (gateway defaults true there).
+`examples/hub/` is **foo → bar ← baz**. bar listens on `127.0.0.1:4434`; foo and baz dial bar (neither listens). QUIC sessions stay on those edges; routes propagate so foo can reach baz’s ULA via bar. `.vscode/launch.json` starts bar, baz, and foo. On a second machine, point baz’s `peers` at bar’s reachable address and run with `--tun` (gateway defaults true there).
 
 ```bash
 ./hopscotch ca bootstrap --dir examples/.local --node foo --node bar --node baz
@@ -73,18 +73,23 @@ go run ./examples/chain
 
 ## Diamond
 
-`examples/diamond/` is a multi-path DAG: **src** fans out across `-width` parallel chains of `-depth` nodes each, which meet at **dst** (default 8×12 = 98 path nodes + src/dst). Launch **diamond**, or:
+`examples/diamond/` is a multi-path DAG: **src** fans out across `-width` parallel chains of `-depth` nodes each, which meet at **dst**. Default is `6×8 + src/dst = 50` nodes.
+
+**Real processes** (one `hopscotch` OS process per node): launch **diamond-50 mesh**, or:
 
 ```bash
-go run ./examples/diamond -width 8 -depth 12
+go build -o hopscotch .
+go run ./examples/diamond/mesh
+./hopscotch traceroute --config examples/.local/diamond/src.yaml dst
 ./hopscotch ping --config examples/.local/diamond/src.yaml dst
 ```
 
-Named echo may traverse any path; overlay forwarding picks one XOR-closest next hop at each step. Logs use `log/slog` (timestamps + key=value). Per-node hopscotch dumps stay off unless you pass `-v`.
+Logs are prefixed with the node name in one terminal. **diamond-50** is the same topology in a single process (faster bring-up).
+
 
 ## Cycle (ring + spur)
 
-`examples/cycle/` builds a session ring with a long side branch — where overlay greedy XOR can loop:
+`examples/cycle/` is a session ring with a long side branch:
 
 ```
 foo → bar → baz → buzz → bar
@@ -92,24 +97,19 @@ foo → bar → baz → buzz → bar
                  bizz → mid1 → mid2 → mid3 → blaz
 ```
 
-At buzz, a packet for blaz that arrived from baz skips baz and chooses among `{bar, bizz}` by ULA XOR. Preferring `bar` *without* progress checks circled the ring. Current `nextHop` uses XOR progress and may dial blaz directly (skipping mid*). Launch **cycle** for normal keys, or **cycle (force-loop keys)** for the old risky XOR keying:
+**Separate processes** (one terminal per node — preferred for reading logs): launch the **cycle mesh** compound in `.vscode/launch.json`. Then:
 
 ```bash
-# normal keys (realistic): wipe so you don't reuse old force-loop certs
-rm -rf examples/.local/cycle
-go run ./examples/cycle -hop-limit 64 -max-ttl 24
-./hopscotch traceroute --config examples/.local/cycle/foo.yaml blaz
-./hopscotch ping --config examples/.local/cycle/foo.yaml blaz
-
-# pathological keys only (old loop-risk XOR; should not circulate with progress)
-go run ./examples/cycle -force-loop -hop-limit 16 -max-ttl 24
+./hopscotch traceroute --config examples/cycle/foo.yaml blaz
+./hopscotch ping --config examples/cycle/foo.yaml blaz
 ```
 
-Look for traceroute walking toward `blaz` along the spur (bar/buzz/bizz/mid*/blaz), `overlay loop detections` near zero, and named `ping` succeeding via flood.
+**All-in-one** (single process): launch **cycle (all-in-one)**, or `go run ./examples/cycle`.
+
 
 ## Overlay TUN
 
-Each NodeID maps to a ULA (`fd00::/8`). `--tun` (or `tun: true` in YAML) creates a TUN and assigns it. Overlay packets ride QUIC datagrams when they fit, otherwise a unidirectional stream. Next hop is the session whose peer ULA equals the destination, otherwise an **XOR-closer-than-self** neighbor (strict progress). If none, the node dials closer Kademlia contacts and retries; still none → Destination Unreachable. Hop limit remains a backstop. TCP SYNs have MSS clamped to the overlay.
+Each NodeID maps to a ULA (`fd00::/8`). `--tun` (or `tun: true` in YAML) creates a TUN and assigns it. Overlay packets ride QUIC datagrams when they fit, otherwise a unidirectional stream. Next hop comes from a **hop-count distance-vector** table over live sessions (advertised on the control stream). No route → Destination Unreachable. Hop limit remains a backstop. TCP SYNs have MSS clamped to the overlay.
 
 One hopscotch per machine is the host overlay NIC (`gateway` defaults true): it installs an unscoped `fd00::/8` route and overlay DNS so ordinary programs resolve `name.hopscotch` and send through the TUN.
 

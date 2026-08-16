@@ -28,8 +28,8 @@ type TraceResult struct {
 }
 
 // TraceRoute sends ICMPv6 echoes with increasing Hop Limit and records
-// which node answers Time Exceeded or Echo Reply. This follows greedy
-// XOR nextHop — the same path as ping6 — not named-echo flood.
+// which node answers Time Exceeded or Echo Reply. This follows the
+// distance-vector RIB — the same path as ping6 — not named-echo flood.
 func (n *Node) TraceRoute(ctx context.Context, rawName string, maxTTL int) (TraceResult, error) {
 	name, err := identity.ParseName(rawName)
 	if err != nil {

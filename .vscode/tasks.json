@@ -17,6 +17,21 @@
       }
     },
     {
+      "label": "bootstrap cycle certs",
+      "type": "shell",
+      "command": "${workspaceFolder}/.vscode/bootstrap-cycle-certs.sh",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared",
+        "showReuseMessage": false,
+        "clear": false
+      }
+    },
+    {
       "label": "go: build (debug)",
       "type": "shell",
       "command": "go",
@@ -36,6 +51,12 @@
       "label": "tun debug prep",
       "dependsOrder": "sequence",
       "dependsOn": ["bootstrap certs", "go: build (debug)"],
+      "problemMatcher": []
+    },
+    {
+      "label": "diamond-50 prep",
+      "dependsOrder": "sequence",
+      "dependsOn": ["go: build (debug)"],
       "problemMatcher": []
     }
   ]

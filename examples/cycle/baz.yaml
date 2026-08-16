@@ -1,0 +1,9 @@
+identity: ../.local/cycle/baz.pem
+ca: ../.local/cycle/ca.crt
+cert: ../.local/cycle/baz.crt
+control: ../.local/cycle/baz.sock
+gateway: false
+listen:
+  - udp:127.0.0.1:4502
+peers:
+  - udp:127.0.0.1:4501

@@ -1,0 +1,9 @@
+identity: ../.local/cycle/blaz.pem
+ca: ../.local/cycle/ca.crt
+cert: ../.local/cycle/blaz.crt
+control: ../.local/cycle/blaz.sock
+gateway: false
+listen:
+  - udp:127.0.0.1:4508
+peers:
+  - udp:127.0.0.1:4507

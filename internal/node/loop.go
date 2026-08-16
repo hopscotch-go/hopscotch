@@ -10,7 +10,7 @@ import (
 
 // flowSight remembers the last forward of a packet flow at this node.
 // Seeing the same ingress→egress again with a lower Hop Limit means the
-// packet is circling the session graph under greedy XOR.
+// packet is circling the session graph.
 type flowSight struct {
 	fromID identity.NodeID
 	nextID identity.NodeID
@@ -108,7 +108,7 @@ func (n *Node) noteOverlayForward(from, next *session, pkt []byte, hopAfterDec i
 		if from != nil {
 			fromLabel = peerLabel(from.id, from.names)
 		}
-		n.log.Printf("overlay loop dst=%s from=%s next=%s hlim=%d count=%d (greedy XOR revisiting the same edge)",
+		n.log.Printf("overlay loop dst=%s from=%s next=%s hlim=%d count=%d (same edge with decreasing Hop Limit)",
 			net.IP(pkt[24:40]), fromLabel, peerLabel(next.id, next.names), hopAfterDec, c)
 	}
 }

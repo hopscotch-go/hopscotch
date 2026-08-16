@@ -1,0 +1,9 @@
+identity: ../.local/cycle/mid1.pem
+ca: ../.local/cycle/ca.crt
+cert: ../.local/cycle/mid1.crt
+control: ../.local/cycle/mid1.sock
+gateway: false
+listen:
+  - udp:127.0.0.1:4505
+peers:
+  - udp:127.0.0.1:4504

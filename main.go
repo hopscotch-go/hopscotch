@@ -29,10 +29,9 @@ func (s *stringList) Set(v string) error {
 func usage() {
 	fmt.Fprintf(os.Stderr, `hopscotch — private mesh of CA-named nodes
 
-Dial one member; hop to the others by name. NodeID is SHA-256 of an
-ed25519 public key. Contacts live in XOR k-buckets. A new node dials
-addresses from peers, then FIND_NODE(self) walks toward its own ID
-until the routing table is populated.
+Dial configured peers; overlay hops follow a distance-vector table over
+live QUIC sessions. NodeID is SHA-256 of an ed25519 public key; overlay
+IPv6 ULAs are derived from that ID.
 
 Every node needs a CA-signed certificate. Self-signed peers are rejected.
 
@@ -255,7 +254,7 @@ func runTraceroute(args []string) error {
 		}
 		return fmt.Errorf("%s", msg.Error)
 	}
-	fmt.Printf("traceroute to %s (overlay XOR, max-ttl=%d)\n", msg.Name, *maxTTL)
+	fmt.Printf("traceroute to %s (overlay DV, max-ttl=%d)\n", msg.Name, *maxTTL)
 	teSeen := map[string]int{}
 	unreach := ""
 	for _, h := range msg.Trace {
@@ -296,7 +295,7 @@ func runTraceroute(args []string) error {
 		}
 	}
 	if unreach != "" && !msg.Reached {
-		fmt.Printf("note: stuck at %s (dest_unreach) — no XOR-progress next hop; not a forward cycle\n", unreach)
+		fmt.Printf("note: stuck at %s (dest_unreach) — no route in the distance-vector table\n", unreach)
 	}
 	return nil
 }

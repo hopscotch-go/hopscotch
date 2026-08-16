@@ -1,0 +1,9 @@
+identity: ../.local/cycle/bizz.pem
+ca: ../.local/cycle/ca.crt
+cert: ../.local/cycle/bizz.crt
+control: ../.local/cycle/bizz.sock
+gateway: false
+listen:
+  - udp:127.0.0.1:4504
+peers:
+  - udp:127.0.0.1:4503

@@ -5,9 +5,12 @@
 //	      └── …                            ┘
 //
 // src dials every path head; each path is a dial-chain; dst dials every tail.
-// Launch via "diamond" in launch.json.
+// Launch via "diamond-50" (in-process) or "diamond-50 mesh" (50 OS processes).
+// Default size: 6×8 + src/dst = 50 nodes.
 //
-//	go run . ping --config examples/.local/diamond/src.yaml dst
+//	go run ./examples/diamond -width 6 -depth 8
+//	go run ./examples/diamond/mesh
+//	go run . traceroute --config examples/.local/diamond/src.yaml dst
 package main
 
 import (
@@ -17,6 +20,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -30,8 +34,8 @@ import (
 )
 
 func main() {
-	width := flag.Int("width", 8, "parallel paths between src and dst")
-	depth := flag.Int("depth", 12, "nodes per path")
+	width := flag.Int("width", 6, "parallel paths between src and dst")
+	depth := flag.Int("depth", 8, "nodes per path (total nodes = 2 + width×depth)")
 	dir := flag.String("dir", filepath.Join("examples", ".local", "diamond"), "cert/config dir")
 	verbose := flag.Bool("v", false, "print raw per-node hopscotch logs")
 	statusEvery := flag.Duration("status", 10*time.Second, "status interval (0 to disable)")
@@ -119,7 +123,7 @@ func main() {
 				paths[w][d] = start(pathName(w, d), true)
 			} else {
 				paths[w][d] = start(pathName(w, d), true, paths[w][d-1].AdvertiseAddr())
-				waitPeers(paths[w][d], 1, 15*time.Second)
+				waitPeers(paths[w][d], 1, 60*time.Second)
 			}
 		}
 		slog.Info("path ready",
@@ -141,19 +145,14 @@ func main() {
 	slog.Info("boot", "phase", "edges")
 	src := start("src", false, headAddrs...)
 	dst := start("dst", false, tailAddrs...)
-	waitPeers(src, *width, 30*time.Second)
-	waitPeers(dst, *width, 30*time.Second)
+	waitPeers(src, *width, 60*time.Second)
+	waitPeers(dst, *width, 60*time.Second)
 	for w := 0; w < *width; w++ {
-		waitPeers(paths[w][0], 2, 30*time.Second)
-		waitPeers(paths[w][*depth-1], 2, 30*time.Second)
+		waitPeers(paths[w][0], 2, 60*time.Second)
+		waitPeers(paths[w][*depth-1], 2, 60*time.Second)
 	}
 
-	best := 0
-	for w := 1; w < *width; w++ {
-		if identity.CloserULA(dst.ID().ULA(), paths[w][0].ID().ULA(), paths[best][0].ID().ULA()) {
-			best = w
-		}
-	}
+	waitRoute(src, dst.ID().ULA(), 30*time.Second)
 
 	srcYAML := filepath.Join(*dir, "src.yaml")
 	if err := os.WriteFile(srcYAML, []byte(
@@ -171,10 +170,9 @@ func main() {
 		"src_want", *width,
 		"dst_connected", dst.PeerCount(),
 		"dst_want", *width,
+		"src_metric_dst", src.RouteMetric(dst.ID().ULA()),
 		"paths_ok", ok,
 		"paths_want", *width,
-		"xor_prefer_head", pathName(best, 0),
-		"xor_prefer_path", best,
 		"control", srcYAML,
 	)
 	if len(bad) > 0 {
@@ -197,7 +195,35 @@ func main() {
 			"hops", got.Hops,
 			"rtt", got.RTT.Round(time.Microsecond),
 			"path", strings.Join(got.Path, "→"),
-			"note", "named echo may fan out; overlay picks one XOR next hop",
+			"note", "named echo flood; overlay DV path may differ",
+		)
+	}
+
+	trCtx, trCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	trace, err := src.TraceRoute(trCtx, "dst", *depth+4)
+	trCancel()
+	if err != nil {
+		slog.Error("overlay traceroute", "err", err)
+	} else {
+		for _, h := range trace.Hops {
+			if h.Timeout {
+				slog.Warn("overlay traceroute", "ttl", h.TTL, "result", "*")
+				continue
+			}
+			label := h.Name
+			if label == "" {
+				label = h.ULA
+			}
+			slog.Info("overlay traceroute",
+				"ttl", h.TTL,
+				"hop", label,
+				"reply", h.Reply,
+				"rtt", h.RTT.Round(time.Microsecond),
+			)
+		}
+		slog.Info("overlay traceroute",
+			"reached", trace.Reach,
+			"src_metric_dst", src.RouteMetric(dst.ID().ULA()),
 		)
 	}
 
@@ -274,4 +300,15 @@ func waitPeers(n *node.Node, want int, d time.Duration) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	fatal("wait peers", "names", n.Names(), "want", want, "got", n.PeerCount())
+}
+
+func waitRoute(n *node.Node, dst net.IP, d time.Duration) {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if n.RouteMetric(dst) > 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	fatal("wait route", "names", n.Names(), "dst", dst.String(), "metric", n.RouteMetric(dst))
 }
