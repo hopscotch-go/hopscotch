@@ -11,7 +11,7 @@ import (
 	"github.com/hopscotch-go/hopscotch/internal/proto"
 )
 
-const echoTTL = 8
+const echoTTL = 128
 
 var errNoSession = errors.New("no session")
 

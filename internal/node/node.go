@@ -36,10 +36,13 @@ type Config struct {
 	Identity  string
 	Cert      string // this node's CA-signed cert PEM
 	CA        string // mesh CA cert PEM; trust any peer this CA signed
-	Control   string // unix socket for local commands (ping)
-	Tun       bool   // kernel TUN
-	Gateway   bool   // this TUN owns fd00::/8 and overlay DNS for the host
-	Log       *log.Logger
+	Control    string // unix socket for local commands (ping, traceroute)
+	Tun        bool   // kernel TUN
+	Gateway    bool   // this TUN owns fd00::/8 and overlay DNS for the host
+	NoListen     bool // if true, do not bind (pure dial-only; cannot be dialed back)
+	NoDialCloser bool // if true, never dial Kademlia contacts for overlay (session graph stays peer-only)
+	LogOverlay   bool // log every overlay nextHop forward
+	Log          *log.Logger
 }
 
 type session struct {
@@ -89,6 +92,13 @@ type Node struct {
 	sessions map[identity.NodeID]*session
 	dialing  map[string]bool
 	echoWait map[string]echoWait
+	pktTap   chan []byte
+
+	flowMu       sync.Mutex
+	flowSight    map[uint64]flowSight
+	overlayLoops atomic.Uint64
+
+	lookupCloserAt map[string]time.Time
 }
 
 func New(cfg Config) (*Node, error) {
@@ -107,6 +117,15 @@ func New(cfg Config) (*Node, error) {
 		ep, err := endpoint.Parse(s, cfg.Network)
 		if err != nil {
 			return nil, fmt.Errorf("listen %q: %w", s, err)
+		}
+		specs = append(specs, ep)
+	}
+	// Every node binds an ephemeral UDP port unless NoListen is set, so
+	// dial-on-demand can open a session to the destination ULA (exact match).
+	if len(specs) == 0 && !cfg.NoListen {
+		ep, err := endpoint.Parse("127.0.0.1:0", cfg.Network)
+		if err != nil {
+			return nil, fmt.Errorf("default listen: %w", err)
 		}
 		specs = append(specs, ep)
 	}
@@ -345,6 +364,7 @@ func (n *Node) Start() error {
 	}
 	n.log.Printf("peers     %d", len(n.peerAddrs()))
 	n.log.Printf("auth      ca (any cert signed by the mesh CA)")
+	n.loadHostsFile()
 	if n.controlPath != "" {
 		if err := n.listenControl(); err != nil {
 			n.Close()
@@ -659,7 +679,7 @@ func (n *Node) establish(conn *quic.Conn, weDialed bool, expect ed25519.PublicKe
 		n.log.Printf("replacing session %s", peerLabel(pid, peerNames))
 	}
 
-	n.table.Insert(kademlia.Contact{ID: pid, Addrs: adv})
+	n.table.Insert(kademlia.Contact{ID: pid, Addrs: contactAddrs(adv, sessAddr)})
 	role := "inbound"
 	if weDialed {
 		role = "dialed"
@@ -672,6 +692,16 @@ func (n *Node) establish(conn *quic.Conn, weDialed bool, expect ed25519.PublicKe
 	go n.readUniStreamLoop(sess)
 	go n.overlayStreamLoop(sess)
 	return sess, nil
+}
+
+func contactAddrs(advertise []string, sessAddr string) []string {
+	if len(advertise) > 0 {
+		return advertise
+	}
+	if sessAddr != "" {
+		return []string{sessAddr}
+	}
+	return nil
 }
 
 func (n *Node) readLoop(s *session) {

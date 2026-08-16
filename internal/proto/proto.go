@@ -10,18 +10,31 @@ import (
 const maxMsg = 1 << 20
 
 type Message struct {
-	Type     string    `json:"type"`
-	RPC      uint64    `json:"rpc,omitempty"`
-	Hello    *Hello    `json:"hello,omitempty"`
-	Target   string    `json:"target,omitempty"`
-	Contacts []Contact `json:"contacts,omitempty"`
-	Name     string    `json:"name,omitempty"`
-	Origin   string    `json:"origin,omitempty"`
-	Path     []string  `json:"path,omitempty"`
-	TTL      int       `json:"ttl,omitempty"`
-	Hops     int       `json:"hops,omitempty"`
-	RTTMs    float64   `json:"rtt_ms,omitempty"`
-	Error    string    `json:"error,omitempty"`
+	Type     string     `json:"type"`
+	RPC      uint64     `json:"rpc,omitempty"`
+	Hello    *Hello     `json:"hello,omitempty"`
+	Target   string     `json:"target,omitempty"`
+	Contacts []Contact  `json:"contacts,omitempty"`
+	Name     string     `json:"name,omitempty"`
+	Origin   string     `json:"origin,omitempty"`
+	Path     []string   `json:"path,omitempty"`
+	TTL      int        `json:"ttl,omitempty"`
+	Hops     int        `json:"hops,omitempty"`
+	RTTMs    float64    `json:"rtt_ms,omitempty"`
+	Error    string     `json:"error,omitempty"`
+	MaxTTL   int        `json:"max_ttl,omitempty"`
+	Trace    []TraceHop `json:"trace,omitempty"`
+	Reached  bool       `json:"reached,omitempty"`
+}
+
+// TraceHop is one probe in a control-plane traceroute response.
+type TraceHop struct {
+	TTL     int     `json:"ttl"`
+	Name    string  `json:"name,omitempty"`
+	Addr    string  `json:"addr,omitempty"`
+	RTTMs   float64 `json:"rtt_ms,omitempty"`
+	Timeout bool    `json:"timeout,omitempty"`
+	Reply   string  `json:"reply,omitempty"`
 }
 
 type Hello struct {

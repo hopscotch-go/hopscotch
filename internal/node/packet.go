@@ -22,16 +22,34 @@ const (
 	nextHeaderTCP      = 6
 	nextHeaderUDP      = 17
 	nextHeaderICMPv6   = 58
-	icmpv6PacketTooBig = 2
-	icmpv6TimeExceeded = 3
-	icmpv6EchoRequest  = 128
-	icmpv6EchoReply    = 129
+	icmpv6DestUnreach   = 1
+	icmpv6PacketTooBig  = 2
+	icmpv6TimeExceeded  = 3
+	icmpv6EchoRequest   = 128
+	icmpv6EchoReply     = 129
+	icmpCodeNoRoute     = 0 // Destination Unreachable: no route to destination
 	tcpFlagSYN         = 0x02
 	tcpOptMSS          = 2
 	tcpHeaderMin       = 20
 	dnsPort            = 53
 	tcpMSS             = tun.MTU - ipv6HeaderLen - tcpHeaderMin // 1220
 )
+
+func (n *Node) loadHostsFile() {
+	if n.cfg.Identity == "" {
+		return
+	}
+	hostsPath := filepath.Join(filepath.Dir(n.cfg.Identity), "hosts")
+	hs, err := tun.ParseHostsFile(hostsPath)
+	if err != nil {
+		return
+	}
+	n.mu.Lock()
+	for _, h := range hs {
+		n.hosts[h.Name] = h.IP
+	}
+	n.mu.Unlock()
+}
 
 func (n *Node) startTun() error {
 	if !n.cfg.Gateway {
@@ -40,14 +58,7 @@ func (n *Node) startTun() error {
 		n.log.Printf("gateway=false: %s is not a host address; ICMP echo answered here", n.id.ULA())
 		return nil
 	}
-	hostsPath := filepath.Join(filepath.Dir(n.cfg.Identity), "hosts")
-	if hs, err := tun.ParseHostsFile(hostsPath); err == nil {
-		n.mu.Lock()
-		for _, h := range hs {
-			n.hosts[h.Name] = h.IP
-		}
-		n.mu.Unlock()
-	}
+	n.loadHostsFile()
 	var dnsPort int
 	if runtime.GOOS == "darwin" {
 		port, err := n.listenLocalDNS()
@@ -109,6 +120,7 @@ func (n *Node) tunLoop() {
 }
 
 func (n *Node) deliverTun(pkt []byte) {
+	n.tapPacket(pkt)
 	n.mu.Lock()
 	d := n.tun
 	n.mu.Unlock()
@@ -143,11 +155,12 @@ func (n *Node) handleIPv6(from *session, pkt []byte) {
 		if from == nil {
 			return
 		}
+		n.tapPacket(pkt)
 		n.mu.Lock()
 		d := n.tun
 		n.mu.Unlock()
 		if d != nil {
-			n.deliverTun(pkt)
+			_ = d.WritePacket(pkt)
 			return
 		}
 		if reply, ok := icmpEchoReply(pkt); ok {
@@ -155,18 +168,29 @@ func (n *Node) handleIPv6(from *session, pkt []byte) {
 		}
 		return
 	}
+	hopAfter := hop
 	if from != nil {
 		if hop <= 1 {
 			n.sendICMPError(from, pkt, icmpv6TimeExceeded, 0, 0)
 			return
 		}
 		pkt[7]--
+		hopAfter = hop - 1
 	}
 	pkt = clampTCPMSS(pkt, tcpMSS)
 	next := n.nextHop(dst, from)
+	if next == nil && !n.cfg.NoDialCloser {
+		n.ensureCloserSessions(dst, from)
+		next = n.nextHop(dst, from)
+	}
 	if next == nil {
+		n.sendICMPError(from, pkt, icmpv6DestUnreach, icmpCodeNoRoute, 0)
+		if n.cfg.LogOverlay {
+			n.log.Printf("overlay no route dst=%s (no XOR-progress neighbor)", dst)
+		}
 		return
 	}
+	n.noteOverlayForward(from, next, pkt, hopAfter)
 	if err := next.writePacket(pkt); err != nil {
 		n.sendPacketTooBig(from, pkt, err)
 		var tooBig *quic.DatagramTooLargeError
@@ -247,8 +271,20 @@ func (n *Node) dnsReply(pkt []byte) []byte {
 	return udp6(dst, src, dport, sport, body)
 }
 
+// nextHop picks an overlay forward target among live sessions.
+// Priority:
+//  1. exact ULA match
+//  2. peer XOR-closer to dst than this node (strict self-progress)
+//  3. peer XOR-closer to dst than the ingress peer (progress vs from)
+//  4. if originating here (from == nil): closest neighbor (first hop)
+//  5. if NoDialCloser: closest neighbor anyway (peer-graph walk; no DHT dial)
+//
+// (2)–(3) prevent session-graph cycles when dial-on-demand can open shortcuts.
+// (5) is for isolated/peer-only meshes: without dialing, greedy is the only
+// way to walk a long spur; Hop Limit + loop detection bound adversarial rings.
 func (n *Node) nextHop(dst net.IP, from *session) *session {
-	var exact, best *session
+	selfULA := n.id.ULA()
+	var exact, bestSelf, bestFrom, bestAny *session
 	for _, s := range n.sessionList() {
 		if s == from {
 			continue
@@ -258,14 +294,33 @@ func (n *Node) nextHop(dst net.IP, from *session) *session {
 			exact = s
 			break
 		}
-		if best == nil || identity.CloserULA(dst, u, best.id.ULA()) {
-			best = s
+		if bestAny == nil || identity.CloserULA(dst, u, bestAny.id.ULA()) {
+			bestAny = s
+		}
+		if identity.CloserULA(dst, u, selfULA) {
+			if bestSelf == nil || identity.CloserULA(dst, u, bestSelf.id.ULA()) {
+				bestSelf = s
+			}
+		}
+		if from != nil && identity.CloserULA(dst, u, from.id.ULA()) {
+			if bestFrom == nil || identity.CloserULA(dst, u, bestFrom.id.ULA()) {
+				bestFrom = s
+			}
 		}
 	}
 	if exact != nil {
 		return exact
 	}
-	return best
+	if bestSelf != nil {
+		return bestSelf
+	}
+	if bestFrom != nil {
+		return bestFrom
+	}
+	if from == nil || n.cfg.NoDialCloser {
+		return bestAny
+	}
+	return nil
 }
 
 func (s *session) writePacket(pkt []byte) error {

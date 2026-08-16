@@ -61,6 +61,62 @@
         "panel": "dedicated"
       },
       "args": ["--config", "examples/hub/foo.yaml", "--tun"]
+    },
+    {
+      "name": "chain-100",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/examples/chain",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": {
+        "group": "hopscotch",
+        "panel": "dedicated"
+      },
+      "args": ["-n", "100"]
+    },
+    {
+      "name": "diamond",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/examples/diamond",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": {
+        "group": "hopscotch",
+        "panel": "dedicated"
+      },
+      "args": ["-width", "8", "-depth", "12"]
+    },
+    {
+      "name": "cycle",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/examples/cycle",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": {
+        "group": "hopscotch",
+        "panel": "dedicated"
+      },
+      "args": ["-hop-limit", "64", "-max-ttl", "24"]
+    },
+    {
+      "name": "cycle (force-loop keys)",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/examples/cycle",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": {
+        "group": "hopscotch",
+        "panel": "dedicated"
+      },
+      "args": ["-force-loop", "-hop-limit", "32", "-max-ttl", "24"]
     }
   ],
   "compounds": [

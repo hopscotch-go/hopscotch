@@ -41,13 +41,13 @@ func (n *Node) controlLoop() {
 
 func (n *Node) handleControl(conn net.Conn) {
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
 	msg, err := proto.Read(conn)
 	if err != nil {
 		return
 	}
 	switch msg.Type {
 	case "ping":
+		_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
 		ctx, cancel := context.WithTimeout(n.ctx, 10*time.Second)
 		defer cancel()
 		got, err := n.Echo(ctx, msg.Name)
@@ -62,7 +62,37 @@ func (n *Node) handleControl(conn net.Conn) {
 			reply.RTTMs = float64(got.RTT.Microseconds()) / 1000
 		}
 		_ = proto.Write(conn, reply)
+	case "traceroute":
+		maxTTL := msg.MaxTTL
+		if maxTTL <= 0 {
+			maxTTL = 32
+		}
+		_ = conn.SetDeadline(time.Now().Add(time.Duration(maxTTL)*time.Second + 5*time.Second))
+		ctx, cancel := context.WithTimeout(n.ctx, time.Duration(maxTTL)*time.Second+2*time.Second)
+		defer cancel()
+		got, err := n.TraceRoute(ctx, msg.Name, maxTTL)
+		reply := proto.Message{Type: "traceroute_ok", RPC: msg.RPC, Name: msg.Name}
+		if err != nil {
+			reply.Type = "error"
+			reply.Error = err.Error()
+		} else {
+			reply.Name = got.Dst
+			reply.Reached = got.Reach
+			reply.Trace = make([]proto.TraceHop, len(got.Hops))
+			for i, h := range got.Hops {
+				reply.Trace[i] = proto.TraceHop{
+					TTL:     h.TTL,
+					Name:    h.Name,
+					Addr:    h.ULA,
+					RTTMs:   float64(h.RTT.Microseconds()) / 1000,
+					Timeout: h.Timeout,
+					Reply:   h.Reply,
+				}
+			}
+		}
+		_ = proto.Write(conn, reply)
 	default:
+		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 		_ = proto.Write(conn, proto.Message{Type: "error", Error: "unknown control command " + msg.Type})
 	}
 }

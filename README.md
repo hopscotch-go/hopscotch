@@ -43,7 +43,7 @@ Startup logs `pubkey` (64 hex chars — that is what belongs in `peers[].pubkey`
 
 `--name` is written into the cert as a URI SAN (`hopscotch:foo`). Repeat it for aliases on the same key. After TLS, every node that trusts `ca.crt` sees the same names. Do not issue the same name on two different keys. Keep `ca.key` offline; nodes only need `ca.crt`.
 
-See [kademlia.md](kademlia.md) for the lookup. [docs/](docs/) has short notes on public keys vs overlay IPs and what QUIC does not do.
+See [kademlia.md](kademlia.md) for the lookup. [docs/routing.md](docs/routing.md) traces overlay packets and named ping hop-by-hop. [docs/](docs/) also has short notes on public keys vs overlay IPs and what QUIC does not do.
 
 ## Three-node hub
 
@@ -62,9 +62,54 @@ With that running, ping baz from foo (the command talks to foo’s control socke
 ./hopscotch ping --config examples/hub/foo.yaml baz
 ```
 
+## 100-node chain
+
+`examples/chain/` runs **n00 ← n01 ← … ← n99** in one process (each node dials the previous). Launch **chain-100** from `.vscode/launch.json`, or:
+
+```bash
+go run ./examples/chain
+./hopscotch ping --config examples/.local/chain/head.yaml n99
+```
+
+## Diamond
+
+`examples/diamond/` is a multi-path DAG: **src** fans out across `-width` parallel chains of `-depth` nodes each, which meet at **dst** (default 8×12 = 98 path nodes + src/dst). Launch **diamond**, or:
+
+```bash
+go run ./examples/diamond -width 8 -depth 12
+./hopscotch ping --config examples/.local/diamond/src.yaml dst
+```
+
+Named echo may traverse any path; overlay forwarding picks one XOR-closest next hop at each step. Logs use `log/slog` (timestamps + key=value). Per-node hopscotch dumps stay off unless you pass `-v`.
+
+## Cycle (ring + spur)
+
+`examples/cycle/` builds a session ring with a long side branch — where overlay greedy XOR can loop:
+
+```
+foo → bar → baz → buzz → bar
+                   ↓
+                 bizz → mid1 → mid2 → mid3 → blaz
+```
+
+At buzz, a packet for blaz that arrived from baz skips baz and chooses among `{bar, bizz}` by ULA XOR. Preferring `bar` *without* progress checks circled the ring. Current `nextHop` uses XOR progress and may dial blaz directly (skipping mid*). Launch **cycle** for normal keys, or **cycle (force-loop keys)** for the old risky XOR keying:
+
+```bash
+# normal keys (realistic): wipe so you don't reuse old force-loop certs
+rm -rf examples/.local/cycle
+go run ./examples/cycle -hop-limit 64 -max-ttl 24
+./hopscotch traceroute --config examples/.local/cycle/foo.yaml blaz
+./hopscotch ping --config examples/.local/cycle/foo.yaml blaz
+
+# pathological keys only (old loop-risk XOR; should not circulate with progress)
+go run ./examples/cycle -force-loop -hop-limit 16 -max-ttl 24
+```
+
+Look for traceroute walking toward `blaz` along the spur (bar/buzz/bizz/mid*/blaz), `overlay loop detections` near zero, and named `ping` succeeding via flood.
+
 ## Overlay TUN
 
-Each NodeID maps to a ULA (`fd00::/8`). `--tun` (or `tun: true` in YAML) creates a TUN and assigns it. Overlay packets ride QUIC datagrams when they fit, otherwise a unidirectional stream. Next hop is the session whose peer ULA equals the destination, otherwise the remaining neighbor with the closest ULA (XOR). One next hop, not a flood. Hop limit stops loops; expired packets get ICMPv6 Time Exceeded. TCP SYNs have MSS clamped to the overlay.
+Each NodeID maps to a ULA (`fd00::/8`). `--tun` (or `tun: true` in YAML) creates a TUN and assigns it. Overlay packets ride QUIC datagrams when they fit, otherwise a unidirectional stream. Next hop is the session whose peer ULA equals the destination, otherwise an **XOR-closer-than-self** neighbor (strict progress). If none, the node dials closer Kademlia contacts and retries; still none → Destination Unreachable. Hop limit remains a backstop. TCP SYNs have MSS clamped to the overlay.
 
 One hopscotch per machine is the host overlay NIC (`gateway` defaults true): it installs an unscoped `fd00::/8` route and overlay DNS so ordinary programs resolve `name.hopscotch` and send through the TUN.
 

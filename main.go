@@ -38,6 +38,7 @@ Every node needs a CA-signed certificate. Self-signed peers are rejected.
 
   hopscotch --config examples/hub/foo.yaml
   hopscotch ping --config examples/hub/foo.yaml baz
+  hopscotch traceroute --config examples/hub/foo.yaml baz
 
 With --tun (needs root), one node is the host overlay NIC (fd00::/8
 and overlay DNS). Then ping6 baz is a normal hostname lookup.
@@ -66,6 +67,13 @@ func main() {
 
 	if len(os.Args) >= 2 && os.Args[1] == "ping" {
 		if err := runPing(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
+	if len(os.Args) >= 2 && os.Args[1] == "traceroute" {
+		if err := runTraceroute(os.Args[2:]); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -206,6 +214,90 @@ func runPing(args []string) error {
 		via = " via " + strings.Join(msg.Path[:len(msg.Path)-1], ",")
 	}
 	fmt.Printf("pong %s hops=%d%s rtt=%.2fms\n", msg.Name, msg.Hops, via, msg.RTTMs)
+	return nil
+}
+
+func runTraceroute(args []string) error {
+	fs := flag.NewFlagSet("traceroute", flag.ContinueOnError)
+	configPath := fs.String("config", "", "yaml of a running node (uses its control socket)")
+	maxTTL := fs.Int("max-ttl", 16, "maximum IPv6 Hop Limit to probe")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *configPath == "" || fs.NArg() < 1 {
+		return fmt.Errorf("usage: hopscotch traceroute --config examples/hub/foo.yaml [--max-ttl 16] baz")
+	}
+	target := fs.Arg(0)
+	f, err := config.Load(*configPath)
+	if err != nil {
+		return err
+	}
+	if f.Control == "" {
+		return fmt.Errorf("%s: no control socket (set control:)", *configPath)
+	}
+	conn, err := net.DialTimeout("unix", f.Control, 2*time.Second)
+	if err != nil {
+		return fmt.Errorf("connect to %s: %w (is that node running?)", f.Control, err)
+	}
+	defer conn.Close()
+	deadline := time.Duration(*maxTTL)*time.Second + 10*time.Second
+	_ = conn.SetDeadline(time.Now().Add(deadline))
+	if err := proto.Write(conn, proto.Message{Type: "traceroute", Name: target, MaxTTL: *maxTTL}); err != nil {
+		return err
+	}
+	msg, err := proto.Read(conn)
+	if err != nil {
+		return err
+	}
+	if msg.Type == "error" || msg.Error != "" {
+		if msg.Error == "" {
+			msg.Error = "traceroute failed"
+		}
+		return fmt.Errorf("%s", msg.Error)
+	}
+	fmt.Printf("traceroute to %s (overlay XOR, max-ttl=%d)\n", msg.Name, *maxTTL)
+	teSeen := map[string]int{}
+	unreach := ""
+	for _, h := range msg.Trace {
+		if h.Timeout {
+			fmt.Printf(" %2d  *\n", h.TTL)
+			continue
+		}
+		label := h.Name
+		if label == "" {
+			label = h.Addr
+		} else if h.Addr != "" {
+			label = fmt.Sprintf("%s (%s)", h.Name, h.Addr)
+		}
+		fmt.Printf(" %2d  %s  %.2fms  %s\n", h.TTL, label, h.RTTMs, h.Reply)
+		switch h.Reply {
+		case "time_exceeded":
+			if h.Name != "" {
+				teSeen[h.Name]++
+			}
+		case "dest_unreach":
+			if unreach == "" {
+				if h.Name != "" {
+					unreach = h.Name
+				} else {
+					unreach = h.Addr
+				}
+			}
+		}
+	}
+	if msg.Reached {
+		fmt.Printf("reached %s\n", msg.Name)
+	} else {
+		fmt.Printf("not reached\n")
+	}
+	for name, n := range teSeen {
+		if n > 1 {
+			fmt.Printf("note: %q sent time_exceeded %d times — possible overlay cycle\n", name, n)
+		}
+	}
+	if unreach != "" && !msg.Reached {
+		fmt.Printf("note: stuck at %s (dest_unreach) — no XOR-progress next hop; not a forward cycle\n", unreach)
+	}
 	return nil
 }
 

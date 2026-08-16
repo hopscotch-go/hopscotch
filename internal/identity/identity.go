@@ -89,7 +89,8 @@ func IsResolverULA(ip net.IP) bool {
 }
 
 // CloserULA reports whether a is XOR-closer to target than b, using
-// the 16-byte IPv6 values. Used to pick a next hop among sessions.
+// the 16-byte IPv6 values. Overlay nextHop requires candidates to be
+// closer to the destination than the local node (strict progress).
 func CloserULA(target, a, b net.IP) bool {
 	ta, aa, ba := target.To16(), a.To16(), b.To16()
 	if ta == nil || aa == nil || ba == nil {

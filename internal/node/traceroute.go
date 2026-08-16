@@ -1,0 +1,193 @@
+package node
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"time"
+
+	"github.com/hopscotch-go/hopscotch/internal/identity"
+	"github.com/hopscotch-go/hopscotch/internal/tun"
+)
+
+// TraceHop is one TTL probe in an overlay traceroute.
+type TraceHop struct {
+	TTL     int
+	Name    string
+	ULA     string
+	RTT     time.Duration
+	Timeout bool
+	Reply   string // "time_exceeded", "echo_reply", or ""
+}
+
+// TraceResult is the full overlay traceroute toward a ULA or name.
+type TraceResult struct {
+	Dst    string
+	Hops   []TraceHop
+	Reach  bool
+}
+
+// TraceRoute sends ICMPv6 echoes with increasing Hop Limit and records
+// which node answers Time Exceeded or Echo Reply. This follows greedy
+// XOR nextHop — the same path as ping6 — not named-echo flood.
+func (n *Node) TraceRoute(ctx context.Context, rawName string, maxTTL int) (TraceResult, error) {
+	name, err := identity.ParseName(rawName)
+	if err != nil {
+		return TraceResult{}, err
+	}
+	dstIP := n.overlayIP(name)
+	if dstIP == nil {
+		return TraceResult{}, fmt.Errorf("unknown name %q (no session/hosts ULA)", name)
+	}
+	if maxTTL <= 0 {
+		maxTTL = 32
+	}
+	if maxTTL > 255 {
+		maxTTL = 255
+	}
+
+	tap := make(chan []byte, 8)
+	n.setPacketTap(tap)
+	defer n.setPacketTap(nil)
+
+	// Ensure local delivery has somewhere to land if no TUN is attached.
+	var mem *tun.Mem
+	n.mu.Lock()
+	haveTun := n.tun != nil
+	n.mu.Unlock()
+	if !haveTun {
+		mem = tun.NewMem()
+		n.AttachTun(mem)
+		defer func() {
+			n.mu.Lock()
+			if n.tun == mem {
+				n.tun = nil
+			}
+			n.mu.Unlock()
+			_ = mem.Close()
+		}()
+	}
+
+	out := TraceResult{Dst: name, Hops: make([]TraceHop, 0, maxTTL)}
+	src := n.id.ULA()
+	for ttl := 1; ttl <= maxTTL; ttl++ {
+		if err := ctx.Err(); err != nil {
+			return out, err
+		}
+		// Drain tap of stale packets.
+		for {
+			select {
+			case <-tap:
+			default:
+				goto drained
+			}
+		}
+	drained:
+		pkt := ipv6ICMPEchoTrace(src, dstIP, uint8(ttl), uint16(ttl))
+		start := time.Now()
+		n.handlePacket(nil, pkt)
+
+		hop := TraceHop{TTL: ttl}
+		deadline := time.NewTimer(800 * time.Millisecond)
+		wait := true
+		for wait {
+			select {
+			case <-ctx.Done():
+				deadline.Stop()
+				return out, ctx.Err()
+			case <-deadline.C:
+				hop.Timeout = true
+				wait = false
+			case reply := <-tap:
+				if len(reply) < ipv6HeaderLen+1 {
+					continue
+				}
+				if !net.IP(reply[24:40]).Equal(src) {
+					continue // not for us
+				}
+				hop.RTT = time.Since(start)
+				hop.ULA = net.IP(reply[8:24]).String()
+				hop.Name = n.nameForULA(net.IP(reply[8:24]))
+				switch reply[40] {
+				case icmpv6TimeExceeded:
+					hop.Reply = "time_exceeded"
+					wait = false
+				case icmpv6EchoReply:
+					hop.Reply = "echo_reply"
+					out.Reach = true
+					wait = false
+				case icmpv6DestUnreach:
+					hop.Reply = "dest_unreach"
+					wait = false
+				default:
+					continue
+				}
+			}
+		}
+		deadline.Stop()
+		out.Hops = append(out.Hops, hop)
+		if out.Reach {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (n *Node) setPacketTap(ch chan []byte) {
+	n.mu.Lock()
+	n.pktTap = ch
+	n.mu.Unlock()
+}
+
+func (n *Node) tapPacket(pkt []byte) {
+	n.mu.Lock()
+	ch := n.pktTap
+	n.mu.Unlock()
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- append([]byte(nil), pkt...):
+	default:
+	}
+}
+
+func (n *Node) nameForULA(ula net.IP) string {
+	if ula.Equal(n.id.ULA()) {
+		return n.hopName()
+	}
+	for _, s := range n.sessionList() {
+		if s.id.ULA().Equal(ula) {
+			if len(s.names) > 0 {
+				return s.names[0]
+			}
+			return s.id.Short()
+		}
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for name, ip := range n.hosts {
+		if ip.Equal(ula) {
+			return name
+		}
+	}
+	return ""
+}
+
+func ipv6ICMPEchoTrace(src, dst net.IP, hop uint8, seq uint16) []byte {
+	p := make([]byte, 56)
+	p[0] = 0x60
+	p[4], p[5] = 0, 16
+	p[6] = nextHeaderICMPv6
+	p[7] = hop
+	copy(p[8:24], src.To16())
+	copy(p[24:40], dst.To16())
+	p[40] = icmpv6EchoRequest
+	p[44], p[45] = 0x74, 0x72 // 'tr'
+	p[46] = byte(seq >> 8)
+	p[47] = byte(seq)
+	sum := icmpv6Checksum(p)
+	p[42] = byte(sum >> 8)
+	p[43] = byte(sum)
+	return p
+}

@@ -17,7 +17,7 @@ type Mem struct {
 func NewMem() *Mem {
 	return &Mem{
 		in:  make(chan []byte, 16),
-		out: make(chan []byte, 16),
+		out: make(chan []byte, 256),
 	}
 }
 
