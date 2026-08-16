@@ -33,6 +33,7 @@ import (
 	"github.com/hopscotch-go/hopscotch/internal/peers"
 )
 
+// main boots an in-process diamond mesh and probes src→dst echo and traceroute.
 func main() {
 	width := flag.Int("width", 6, "parallel paths between src and dst")
 	depth := flag.Int("depth", 8, "nodes per path (total nodes = 2 + width×depth)")
@@ -263,11 +264,13 @@ func main() {
 	}
 }
 
+// fatal logs an error and exits the process.
 func fatal(msg string, args ...any) {
 	slog.Error(msg, args...)
 	os.Exit(1)
 }
 
+// pathReport counts healthy parallel paths and lists any with too few peers.
 func pathReport(paths [][]*node.Node) (ok int, bad []string) {
 	for w, path := range paths {
 		broken := ""
@@ -287,10 +290,12 @@ func pathReport(paths [][]*node.Node) (ok int, bad []string) {
 	return ok, bad
 }
 
+// pathName returns the mesh name for path index w at depth d.
 func pathName(w, d int) string {
 	return fmt.Sprintf("p%02dn%02d", w, d)
 }
 
+// waitPeers blocks until n has at least want peers or the deadline passes.
 func waitPeers(n *node.Node, want int, d time.Duration) {
 	deadline := time.Now().Add(d)
 	for time.Now().Before(deadline) {
@@ -302,6 +307,7 @@ func waitPeers(n *node.Node, want int, d time.Duration) {
 	fatal("wait peers", "names", n.Names(), "want", want, "got", n.PeerCount())
 }
 
+// waitRoute blocks until n has a positive route metric to dst or the deadline passes.
 func waitRoute(n *node.Node, dst net.IP, d time.Duration) {
 	deadline := time.Now().Add(d)
 	for time.Now().Before(deadline) {

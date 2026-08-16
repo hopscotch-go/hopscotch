@@ -18,6 +18,7 @@ type Peer struct {
 	Pub  ed25519.PublicKey
 }
 
+// Load reads a peers file from path and parses its entries.
 func Load(path string) ([]Peer, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -26,6 +27,7 @@ func Load(path string) ([]Peer, error) {
 	return Parse(string(b))
 }
 
+// Parse parses peer lines of the form `addr` or `pubkey addr`.
 func Parse(text string) ([]Peer, error) {
 	var out []Peer
 	sc := bufio.NewScanner(strings.NewReader(text))
@@ -52,6 +54,7 @@ func Parse(text string) ([]Peer, error) {
 	return out, nil
 }
 
+// parseFields builds a Peer from a single whitespace-split line.
 func parseFields(fields []string) (Peer, error) {
 	var p Peer
 	switch len(fields) {

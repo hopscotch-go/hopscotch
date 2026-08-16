@@ -32,6 +32,7 @@ func BootstrapDir(dir string, names []string) error {
 	})
 }
 
+// bootstrapDirLocked creates missing CA and node certs under dir while locked.
 func bootstrapDirLocked(dir string, names []string) error {
 	caKey := filepath.Join(dir, "ca.key")
 	caCert := filepath.Join(dir, "ca.crt")
@@ -59,6 +60,7 @@ func bootstrapDirLocked(dir string, names []string) error {
 	return writeHosts(dir, names)
 }
 
+// writeHosts writes an overlay hosts file mapping each node's ULA to its name.
 func writeHosts(dir string, names []string) error {
 	var b strings.Builder
 	b.WriteString("# hopscotch overlay names → ULA\n")
@@ -72,6 +74,7 @@ func writeHosts(dir string, names []string) error {
 	return os.WriteFile(filepath.Join(dir, "hosts"), []byte(b.String()), 0o644)
 }
 
+// withMkdirLock runs fn while holding an exclusive mkdir-based lock at lockDir.
 func withMkdirLock(lockDir string, fn func() error) error {
 	deadline := time.Now().Add(30 * time.Second)
 	for {

@@ -13,6 +13,7 @@ const udpMax = 65507
 // UDPDialer opens a connected UDP socket from an ephemeral local port.
 type UDPDialer struct{}
 
+// Dial opens a connected UDP session to address.
 func (UDPDialer) Dial(ctx context.Context, address string) (Session, error) {
 	var d net.Dialer
 	c, err := d.DialContext(ctx, "udp", address)
@@ -31,9 +32,13 @@ type udpDialSession struct {
 	c *net.UDPConn
 }
 
-func (s *udpDialSession) LocalAddr() net.Addr  { return wrapAddr("udp", s.c.LocalAddr()) }
+// LocalAddr returns the local address of the dialed UDP session.
+func (s *udpDialSession) LocalAddr() net.Addr { return wrapAddr("udp", s.c.LocalAddr()) }
+
+// RemoteAddr returns the remote address of the dialed UDP session.
 func (s *udpDialSession) RemoteAddr() net.Addr { return wrapAddr("udp", s.c.RemoteAddr()) }
 
+// Send writes one datagram on the connected UDP socket.
 func (s *udpDialSession) Send(data []byte) error {
 	if len(data) > udpMax {
 		return fmt.Errorf("udp payload too large")
@@ -48,6 +53,7 @@ func (s *udpDialSession) Send(data []byte) error {
 	return nil
 }
 
+// Recv reads one datagram, or ErrTimeout if none arrives in time.
 func (s *udpDialSession) Recv(timeout time.Duration) ([]byte, error) {
 	if err := s.c.SetReadDeadline(time.Now().Add(timeout)); err != nil {
 		return nil, err
@@ -63,6 +69,7 @@ func (s *udpDialSession) Recv(timeout time.Duration) ([]byte, error) {
 	return append([]byte(nil), buf[:n]...), nil
 }
 
+// Close closes the connected UDP socket.
 func (s *udpDialSession) Close() error { return s.c.Close() }
 
 type UDPListener struct {
@@ -71,6 +78,7 @@ type UDPListener struct {
 	byAddr map[string]*udpListenSession
 }
 
+// NewUDPListener binds a UDP socket and tracks per-peer sessions.
 func NewUDPListener(address string) (*UDPListener, error) {
 	addr, err := net.ResolveUDPAddr("udp", address)
 	if err != nil {
@@ -83,10 +91,13 @@ func NewUDPListener(address string) (*UDPListener, error) {
 	return &UDPListener{c: c, byAddr: make(map[string]*udpListenSession)}, nil
 }
 
+// Addr returns the listener's local UDP address.
 func (l *UDPListener) Addr() net.Addr { return l.c.LocalAddr() }
 
+// Close shuts down the UDP listener socket.
 func (l *UDPListener) Close() error { return l.c.Close() }
 
+// Dial returns a session for sending to address on the shared listen socket.
 func (l *UDPListener) Dial(_ context.Context, address string) (Session, error) {
 	raddr, err := net.ResolveUDPAddr("udp", address)
 	if err != nil {
@@ -95,6 +106,7 @@ func (l *UDPListener) Dial(_ context.Context, address string) (Session, error) {
 	return l.session(raddr), nil
 }
 
+// session returns the existing or newly created per-peer listen session.
 func (l *UDPListener) session(raddr *net.UDPAddr) *udpListenSession {
 	key := raddr.String()
 	l.mu.Lock()
@@ -107,6 +119,7 @@ func (l *UDPListener) session(raddr *net.UDPAddr) *udpListenSession {
 	return sess
 }
 
+// Start demuxes inbound UDP packets into per-peer sessions until ctx is done.
 func (l *UDPListener) Start(ctx context.Context) (<-chan Session, error) {
 	ch := make(chan Session)
 	go func() {
@@ -154,6 +167,7 @@ type udpListenSession struct {
 	closeOnce sync.Once
 }
 
+// newUDPListenSession creates a per-peer session backed by the shared UDP listener.
 func newUDPListenSession(l *UDPListener, raddr *net.UDPAddr) *udpListenSession {
 	return &udpListenSession{
 		l:      l,
@@ -163,6 +177,7 @@ func newUDPListenSession(l *UDPListener, raddr *net.UDPAddr) *udpListenSession {
 	}
 }
 
+// deliver queues an inbound datagram for Recv, dropping if the session is closed or full.
 func (s *udpListenSession) deliver(data []byte) {
 	select {
 	case s.recv <- data:
@@ -171,9 +186,13 @@ func (s *udpListenSession) deliver(data []byte) {
 	}
 }
 
-func (s *udpListenSession) LocalAddr() net.Addr  { return wrapAddr("udp", s.l.c.LocalAddr()) }
+// LocalAddr returns the listener's local address for this peer session.
+func (s *udpListenSession) LocalAddr() net.Addr { return wrapAddr("udp", s.l.c.LocalAddr()) }
+
+// RemoteAddr returns the peer address for this listen session.
 func (s *udpListenSession) RemoteAddr() net.Addr { return wrapAddr("udp", s.raddr) }
 
+// Send writes a datagram to this session's peer via the shared UDP socket.
 func (s *udpListenSession) Send(data []byte) error {
 	n, err := s.l.c.WriteToUDP(data, s.raddr)
 	if err != nil {
@@ -185,6 +204,7 @@ func (s *udpListenSession) Send(data []byte) error {
 	return nil
 }
 
+// Recv waits for the next queued datagram, or ErrTimeout if none arrives in time.
 func (s *udpListenSession) Recv(timeout time.Duration) ([]byte, error) {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
@@ -198,6 +218,7 @@ func (s *udpListenSession) Recv(timeout time.Duration) ([]byte, error) {
 	}
 }
 
+// Close marks the peer session closed and removes it from the listener map.
 func (s *udpListenSession) Close() error {
 	s.closeOnce.Do(func() { close(s.closed) })
 	s.l.mu.Lock()

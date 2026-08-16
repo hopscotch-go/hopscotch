@@ -21,6 +21,7 @@ import (
 	"github.com/hopscotch-go/hopscotch/internal/peers"
 )
 
+// main boots an in-process dial-chain of hopscotch nodes and keeps it running.
 func main() {
 	n := flag.Int("n", 100, "number of nodes in the chain")
 	dir := flag.String("dir", filepath.Join("examples", ".local", "chain"), "cert/config dir")
@@ -117,6 +118,7 @@ func main() {
 	log.Printf("shutting down")
 }
 
+// waitPeers blocks until n has at least want peers or the deadline passes.
 func waitPeers(n *node.Node, want int, d time.Duration) {
 	deadline := time.Now().Add(d)
 	for time.Now().Before(deadline) {

@@ -27,6 +27,7 @@ const (
 	basePort = 4601 // path ports: basePort + w*depth + d
 )
 
+// main launches one hopscotch OS process per diamond-mesh node and waits for shutdown.
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
@@ -127,6 +128,7 @@ type prefixWriter struct {
 	mu     sync.Mutex
 }
 
+// Write prefixes each complete line with the node name before writing to out.
 func (w *prefixWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -148,6 +150,7 @@ func (w *prefixWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// writeConfigs writes per-node YAML configs for the multi-process diamond mesh.
 func writeConfigs(dir string) error {
 	write := func(name, body string) error {
 		return os.WriteFile(filepath.Join(dir, name+".yaml"), []byte(body), 0o644)
@@ -196,10 +199,12 @@ peers:
 	return nil
 }
 
+// pathName returns the mesh name for path index w at depth d.
 func pathName(w, d int) string {
 	return fmt.Sprintf("p%02dn%02d", w, d)
 }
 
+// repoRoot walks up from the working directory until it finds go.mod.
 func repoRoot() (string, error) {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -218,6 +223,7 @@ func repoRoot() (string, error) {
 	}
 }
 
+// killAll sends SIGTERM to all child processes, then kills any that outlive the deadline.
 func killAll(mu *sync.Mutex, cmds []*exec.Cmd) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -244,6 +250,7 @@ func killAll(mu *sync.Mutex, cmds []*exec.Cmd) {
 	}
 }
 
+// fatal logs err and exits the process.
 func fatal(err error) {
 	slog.Error("fatal", "err", err)
 	os.Exit(1)

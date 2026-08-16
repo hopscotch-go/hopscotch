@@ -22,9 +22,9 @@ type TraceHop struct {
 
 // TraceResult is the full overlay traceroute toward a ULA or name.
 type TraceResult struct {
-	Dst    string
-	Hops   []TraceHop
-	Reach  bool
+	Dst   string
+	Hops  []TraceHop
+	Reach bool
 }
 
 // TraceRoute sends ICMPv6 echoes with increasing Hop Limit and records
@@ -133,12 +133,14 @@ func (n *Node) TraceRoute(ctx context.Context, rawName string, maxTTL int) (Trac
 	return out, nil
 }
 
+// setPacketTap installs or clears a channel that receives locally delivered overlay packets.
 func (n *Node) setPacketTap(ch chan []byte) {
 	n.mu.Lock()
 	n.pktTap = ch
 	n.mu.Unlock()
 }
 
+// tapPacket non-blocking copies pkt to the packet tap if set.
 func (n *Node) tapPacket(pkt []byte) {
 	n.mu.Lock()
 	ch := n.pktTap
@@ -152,6 +154,7 @@ func (n *Node) tapPacket(pkt []byte) {
 	}
 }
 
+// nameForULA resolves a mesh ULA to a peer name or hosts entry.
 func (n *Node) nameForULA(ula net.IP) string {
 	if ula.Equal(n.id.ULA()) {
 		return n.hopName()
@@ -174,6 +177,7 @@ func (n *Node) nameForULA(ula net.IP) string {
 	return ""
 }
 
+// ipv6ICMPEchoTrace builds an overlay ICMPv6 echo with the given Hop Limit.
 func ipv6ICMPEchoTrace(src, dst net.IP, hop uint8, seq uint16) []byte {
 	p := make([]byte, 56)
 	p[0] = 0x60

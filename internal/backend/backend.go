@@ -31,6 +31,7 @@ type Dialer interface {
 	Dial(ctx context.Context, address string) (Session, error)
 }
 
+// NewListener creates a Listener for the given backend network and address.
 func NewListener(network, address string) (Listener, error) {
 	switch network {
 	case "tcp":
@@ -42,6 +43,7 @@ func NewListener(network, address string) (Listener, error) {
 	}
 }
 
+// NewDialer creates a Dialer for the given backend network.
 func NewDialer(network string) (Dialer, error) {
 	switch network {
 	case "tcp":

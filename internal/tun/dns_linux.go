@@ -12,6 +12,7 @@ import (
 	"github.com/hopscotch-go/hopscotch/internal/identity"
 )
 
+// InstallDNS configures systemd-resolved for the overlay DNS zone on Linux.
 func InstallDNS(ifName string, _ int) (func() error, error) {
 	ifi, err := net.InterfaceByName(ifName)
 	if err != nil {
@@ -52,6 +53,7 @@ type resolvedDomain struct {
 	RoutingOnly bool
 }
 
+// resolvedCall invokes a systemd-resolved D-Bus method on the system bus.
 func resolvedCall(method string, args ...any) error {
 	conn, err := dbus.ConnectSystemBus()
 	if err != nil {

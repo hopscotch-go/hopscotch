@@ -22,12 +22,12 @@ const (
 	nextHeaderTCP      = 6
 	nextHeaderUDP      = 17
 	nextHeaderICMPv6   = 58
-	icmpv6DestUnreach   = 1
-	icmpv6PacketTooBig  = 2
-	icmpv6TimeExceeded  = 3
-	icmpv6EchoRequest   = 128
-	icmpv6EchoReply     = 129
-	icmpCodeNoRoute     = 0 // Destination Unreachable: no route to destination
+	icmpv6DestUnreach  = 1
+	icmpv6PacketTooBig = 2
+	icmpv6TimeExceeded = 3
+	icmpv6EchoRequest  = 128
+	icmpv6EchoReply    = 129
+	icmpCodeNoRoute    = 0 // Destination Unreachable: no route to destination
 	tcpFlagSYN         = 0x02
 	tcpOptMSS          = 2
 	tcpHeaderMin       = 20
@@ -35,6 +35,7 @@ const (
 	tcpMSS             = tun.MTU - ipv6HeaderLen - tcpHeaderMin // 1220
 )
 
+// loadHostsFile loads local name→ULA mappings from the identity-adjacent hosts file.
 func (n *Node) loadHostsFile() {
 	if n.cfg.Identity == "" {
 		return
@@ -51,6 +52,7 @@ func (n *Node) loadHostsFile() {
 	n.mu.Unlock()
 }
 
+// startTun opens a gateway TUN and optional local DNS for host overlay traffic.
 func (n *Node) startTun() error {
 	if !n.cfg.Gateway {
 		// Extra hopscotch on this host must not ifconfig its ULA: ping6
@@ -93,6 +95,7 @@ func (n *Node) AttachTun(d tun.Device) {
 	n.attachTunLocked(d)
 }
 
+// attachTunLocked installs d as the TUN device and starts the read loop.
 func (n *Node) attachTunLocked(d tun.Device) {
 	n.mu.Lock()
 	if n.tun != nil {
@@ -103,6 +106,7 @@ func (n *Node) attachTunLocked(d tun.Device) {
 	go n.tunLoop()
 }
 
+// tunLoop reads packets from the kernel TUN into the overlay forward path.
 func (n *Node) tunLoop() {
 	for {
 		n.mu.Lock()
@@ -119,6 +123,7 @@ func (n *Node) tunLoop() {
 	}
 }
 
+// deliverTun taps then writes an IPv6 packet to the local TUN.
 func (n *Node) deliverTun(pkt []byte) {
 	n.tapPacket(pkt)
 	n.mu.Lock()
@@ -130,6 +135,7 @@ func (n *Node) deliverTun(pkt []byte) {
 	_ = d.WritePacket(pkt)
 }
 
+// handlePacket accepts an overlay IPv6 packet from TUN or a peer session.
 func (n *Node) handlePacket(from *session, pkt []byte) {
 	if len(pkt) == 0 || pkt[0]>>4 != 6 {
 		return
@@ -137,6 +143,7 @@ func (n *Node) handlePacket(from *session, pkt []byte) {
 	n.handleIPv6(from, pkt)
 }
 
+// handleIPv6 routes overlay IPv6: local delivery, DNS, or RIB next-hop forward.
 func (n *Node) handleIPv6(from *session, pkt []byte) {
 	dst, hop, ok := parseIPv6(pkt)
 	if !ok || !identity.IsMeshULA(dst) {
@@ -203,6 +210,7 @@ func (n *Node) handleIPv6(from *session, pkt []byte) {
 	}
 }
 
+// listenLocalDNS binds a localhost UDP DNS socket for macOS /etc/resolver.
 func (n *Node) listenLocalDNS() (int, error) {
 	pc, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
@@ -218,6 +226,7 @@ func (n *Node) listenLocalDNS() (int, error) {
 	return addr.Port, nil
 }
 
+// localDNSLoop answers local DNS queries via overlay name lookup.
 func (n *Node) localDNSLoop(pc net.PacketConn) {
 	buf := make([]byte, 2048)
 	for {
@@ -233,10 +242,12 @@ func (n *Node) localDNSLoop(pc net.PacketConn) {
 	}
 }
 
+// overlayLookup resolves an overlay DNS name to an AAAA record.
 func (n *Node) overlayLookup(name string) dns.Record {
 	return dns.Record{AAAA: n.overlayIP(name)}
 }
 
+// overlayIP maps an overlay name to a mesh ULA from self, sessions, or hosts.
 func (n *Node) overlayIP(name string) net.IP {
 	name = strings.ToLower(name)
 	if name == "dns" {
@@ -262,6 +273,7 @@ func (n *Node) overlayIP(name string) net.IP {
 	return nil
 }
 
+// dnsReply builds an overlay DNS response packet for resolver-ULA queries.
 func (n *Node) dnsReply(pkt []byte) []byte {
 	src, dst, sport, dport, payload, ok := parseUDP6(pkt)
 	if !ok || dport != dnsPort {
@@ -292,6 +304,7 @@ func (n *Node) nextHop(dst net.IP, from *session) *session {
 	return nil
 }
 
+// writePacket sends an overlay IPv6 packet as a QUIC datagram, falling back to uni-stream.
 func (s *session) writePacket(pkt []byte) error {
 	if s.conn == nil {
 		return fmt.Errorf("no connection")
@@ -321,6 +334,7 @@ func (s *session) writePacket(pkt []byte) error {
 	}
 }
 
+// datagramFallback reports whether err should fall back from datagram to stream.
 func datagramFallback(err error) bool {
 	var tooBig *quic.DatagramTooLargeError
 	if errors.As(err, &tooBig) {
@@ -329,6 +343,7 @@ func datagramFallback(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "datagram support disabled")
 }
 
+// overlayStreamLoop drains uniQ and sends oversized overlay packets on uni-streams.
 func (n *Node) overlayStreamLoop(s *session) {
 	for {
 		select {
@@ -344,6 +359,7 @@ func (n *Node) overlayStreamLoop(s *session) {
 	}
 }
 
+// writePacketStream sends one overlay packet on a new unidirectional QUIC stream.
 func (s *session) writePacketStream(pkt []byte) error {
 	st, err := s.conn.OpenUniStreamSync(s.conn.Context())
 	if err != nil {
@@ -354,6 +370,7 @@ func (s *session) writePacketStream(pkt []byte) error {
 	return err
 }
 
+// readUniStreamLoop accepts unidirectional streams carrying overlay packets.
 func (n *Node) readUniStreamLoop(s *session) {
 	for {
 		st, err := s.conn.AcceptUniStream(n.ctx)
@@ -364,6 +381,7 @@ func (n *Node) readUniStreamLoop(s *session) {
 	}
 }
 
+// readUniPacket reads one overlay packet from a uni-stream and handles it.
 func (n *Node) readUniPacket(s *session, st *quic.ReceiveStream) {
 	pkt, err := io.ReadAll(io.LimitReader(st, int64(tun.MTU)+1))
 	if err != nil || len(pkt) < ipv6HeaderLen || len(pkt) > tun.MTU {
@@ -372,6 +390,7 @@ func (n *Node) readUniPacket(s *session, st *quic.ReceiveStream) {
 	n.handlePacket(s, pkt)
 }
 
+// sendPacketTooBig emits ICMPv6 Packet Too Big when a datagram exceeds underlay limits.
 func (n *Node) sendPacketTooBig(from *session, pkt []byte, err error) {
 	var tooBig *quic.DatagramTooLargeError
 	if !errors.As(err, &tooBig) {
@@ -384,6 +403,7 @@ func (n *Node) sendPacketTooBig(from *session, pkt []byte, err error) {
 	n.sendICMPError(from, pkt, icmpv6PacketTooBig, 0, uint32(mtu))
 }
 
+// sendICMPError sends an ICMPv6 error toward from or the local TUN.
 func (n *Node) sendICMPError(from *session, pkt []byte, typ, code uint8, param uint32) {
 	reply := icmpv6Error(pkt, n.id.ULA(), typ, code, param)
 	if reply == nil {
@@ -396,6 +416,7 @@ func (n *Node) sendICMPError(from *session, pkt []byte, typ, code uint8, param u
 	_ = from.writePacket(reply)
 }
 
+// icmpv6Error builds an ICMPv6 error packet quoting as much of pkt as fits.
 func icmpv6Error(pkt []byte, src net.IP, typ, code uint8, param uint32) []byte {
 	src = src.To16()
 	if src == nil || len(pkt) < ipv6HeaderLen || pkt[0]>>4 != 6 {
@@ -435,6 +456,7 @@ func icmpv6Error(pkt []byte, src net.IP, typ, code uint8, param uint32) []byte {
 	return out
 }
 
+// clampTCPMSS caps TCP MSS options on SYN so segments fit overlay MTU.
 func clampTCPMSS(pkt []byte, mss uint16) []byte {
 	if len(pkt) < ipv6HeaderLen+tcpHeaderMin || pkt[6] != nextHeaderTCP {
 		return pkt
@@ -486,10 +508,12 @@ func clampTCPMSS(pkt []byte, mss uint16) []byte {
 	return pkt
 }
 
+// tcp6Checksum computes the IPv6 TCP checksum for pkt.
 func tcp6Checksum(pkt []byte) uint16 {
 	return transportChecksum(pkt, nextHeaderTCP)
 }
 
+// transportChecksum computes an IPv6 pseudo-header transport checksum.
 func transportChecksum(pkt []byte, proto uint8) uint16 {
 	var sum uint32
 	plen := uint32(len(pkt) - ipv6HeaderLen)
@@ -515,6 +539,7 @@ func transportChecksum(pkt []byte, proto uint8) uint16 {
 	return c
 }
 
+// readDatagramLoop receives overlay packets from QUIC datagrams.
 func (n *Node) readDatagramLoop(s *session) {
 	for {
 		pkt, err := s.conn.ReceiveDatagram(n.ctx)
@@ -525,6 +550,7 @@ func (n *Node) readDatagramLoop(s *session) {
 	}
 }
 
+// parseIPv6 extracts destination and hop limit from an IPv6 header.
 func parseIPv6(pkt []byte) (dst net.IP, hopLimit int, ok bool) {
 	if len(pkt) < ipv6HeaderLen || pkt[0]>>4 != 6 {
 		return nil, 0, false
@@ -532,6 +558,7 @@ func parseIPv6(pkt []byte) (dst net.IP, hopLimit int, ok bool) {
 	return net.IP(pkt[24:40]), int(pkt[7]), true
 }
 
+// parseUDP6 parses an IPv6 UDP packet into endpoints and payload.
 func parseUDP6(pkt []byte) (src, dst net.IP, sport, dport uint16, payload []byte, ok bool) {
 	if len(pkt) < ipv6HeaderLen+8 || pkt[0]>>4 != 6 || pkt[6] != nextHeaderUDP {
 		return
@@ -549,6 +576,7 @@ func parseUDP6(pkt []byte) (src, dst net.IP, sport, dport uint16, payload []byte
 	return
 }
 
+// udp6 builds an IPv6 UDP packet with checksum.
 func udp6(src, dst net.IP, sport, dport uint16, payload []byte) []byte {
 	src, dst = src.To16(), dst.To16()
 	if src == nil || dst == nil {
@@ -576,10 +604,12 @@ func udp6(src, dst net.IP, sport, dport uint16, payload []byte) []byte {
 	return pkt
 }
 
+// udp6Checksum computes the IPv6 UDP checksum for pkt.
 func udp6Checksum(pkt []byte) uint16 {
 	return transportChecksum(pkt, nextHeaderUDP)
 }
 
+// icmpEchoReply turns an ICMPv6 echo request into a reply, if applicable.
 func icmpEchoReply(pkt []byte) ([]byte, bool) {
 	if len(pkt) < ipv6HeaderLen+8 || pkt[6] != nextHeaderICMPv6 || pkt[40] != icmpv6EchoRequest {
 		return nil, false
@@ -596,6 +626,7 @@ func icmpEchoReply(pkt []byte) ([]byte, bool) {
 	return out, true
 }
 
+// icmpv6Checksum computes the ICMPv6 checksum for pkt.
 func icmpv6Checksum(pkt []byte) uint16 {
 	return transportChecksum(pkt, nextHeaderICMPv6)
 }

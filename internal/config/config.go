@@ -38,6 +38,7 @@ type rawFile struct {
 
 type stringList []string
 
+// UnmarshalYAML accepts a single string or a list of strings for listen.
 func (s *stringList) UnmarshalYAML(value *yaml.Node) error {
 	switch value.Kind {
 	case yaml.ScalarNode:
@@ -60,6 +61,7 @@ type rawPeer struct {
 	Pubkey string
 }
 
+// UnmarshalYAML accepts a peer as an address string or {addr, pubkey} map.
 func (p *rawPeer) UnmarshalYAML(value *yaml.Node) error {
 	switch value.Kind {
 	case yaml.ScalarNode:
@@ -81,6 +83,7 @@ func (p *rawPeer) UnmarshalYAML(value *yaml.Node) error {
 	}
 }
 
+// Load reads and validates a node YAML config, resolving relative paths.
 func Load(path string) (*File, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -125,6 +128,7 @@ func Load(path string) (*File, error) {
 	return out, nil
 }
 
+// parsePeer converts a raw YAML peer into a canonical peers.Peer.
 func parsePeer(rp rawPeer) (peers.Peer, error) {
 	var p peers.Peer
 	if rp.Addr == "" {
@@ -145,6 +149,7 @@ func parsePeer(rp rawPeer) (peers.Peer, error) {
 	return p, nil
 }
 
+// resolve joins a relative path with base, leaving absolute paths unchanged.
 func resolve(base, p string) string {
 	if p == "" || filepath.IsAbs(p) {
 		return p

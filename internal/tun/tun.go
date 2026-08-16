@@ -25,6 +25,8 @@ type Opts struct {
 	DNSPort int  // darwin stub; 0 means default 53
 }
 
+// Setup opens a TUN device, configures addressing/routing, and optionally
+// installs gateway DNS and netfilter hooks.
 func Setup(opts Opts) (Device, error) {
 	d, err := Open()
 	if err != nil {
@@ -41,6 +43,7 @@ func Setup(opts Opts) (Device, error) {
 	return d, nil
 }
 
+// apply configures the device and returns a Close-time revert for gateway setup.
 func apply(d Device, opts Opts) (func() error, error) {
 	if err := Configure(d, opts); err != nil {
 		return nil, rootHint(err)
@@ -81,6 +84,7 @@ type withHooks struct {
 	beforeClose func() error
 }
 
+// Close runs registered revert hooks, then closes the underlying device.
 func (w *withHooks) Close() error {
 	if w.beforeClose != nil {
 		_ = w.beforeClose()
@@ -88,6 +92,7 @@ func (w *withHooks) Close() error {
 	return w.Device.Close()
 }
 
+// rootHint annotates permission errors with a sudo hint for TUN setup.
 func rootHint(err error) error {
 	if err == nil {
 		return nil
@@ -102,6 +107,7 @@ func rootHint(err error) error {
 	return err
 }
 
+// safeIfName reports whether name is a safe alphanumeric interface identifier.
 func safeIfName(name string) bool {
 	if name == "" {
 		return false

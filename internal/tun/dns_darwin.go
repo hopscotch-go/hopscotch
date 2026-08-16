@@ -14,6 +14,7 @@ const resolverHeader = "# hopscotch\n"
 
 var resolverDir = "/etc/resolver"
 
+// InstallDNS writes a macOS /etc/resolver file for the overlay DNS zone.
 func InstallDNS(ifName string, dnsPort int) (func() error, error) {
 	if err := os.MkdirAll(resolverDir, 0o755); err != nil {
 		return nil, err
@@ -38,6 +39,7 @@ func InstallDNS(ifName string, dnsPort int) (func() error, error) {
 	}, nil
 }
 
+// removeResolverFile deletes a hopscotch-owned /etc/resolver file if present.
 func removeResolverFile(path string) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -52,6 +54,7 @@ func removeResolverFile(path string) error {
 	return os.Remove(path)
 }
 
+// hasResolverHeader reports whether s starts with the hopscotch resolver marker.
 func hasResolverHeader(s string) bool {
 	return len(s) >= len(resolverHeader) && s[:len(resolverHeader)] == resolverHeader
 }

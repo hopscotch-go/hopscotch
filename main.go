@@ -19,13 +19,16 @@ import (
 
 type stringList []string
 
+// String returns the joined flag values for flag.Value display.
 func (s *stringList) String() string { return strings.Join(*s, ", ") }
 
+// Set appends one repeated flag value to the list.
 func (s *stringList) Set(v string) error {
 	*s = append(*s, v)
 	return nil
 }
 
+// usage prints the hopscotch CLI help text and flag defaults.
 func usage() {
 	fmt.Fprintf(os.Stderr, `hopscotch — private mesh of CA-named nodes
 
@@ -61,6 +64,7 @@ Flags:
 	flag.PrintDefaults()
 }
 
+// main runs the hopscotch node CLI, or dispatches ping, traceroute, and ca subcommands.
 func main() {
 	log.SetFlags(log.Ltime | log.Lmsgprefix)
 
@@ -137,6 +141,7 @@ func main() {
 
 var errUsage = fmt.Errorf("usage")
 
+// nodeConfigFromFlags builds a node.Config from a YAML path or discrete CLI flags.
 func nodeConfigFromFlags(configPath string, listens []string, peersFile, idFile, caFile, certFile string) (node.Config, error) {
 	if configPath != "" {
 		f, err := config.Load(configPath)
@@ -172,6 +177,7 @@ func nodeConfigFromFlags(configPath string, listens []string, peersFile, idFile,
 	}, nil
 }
 
+// runPing sends an overlay ping via a running node's control socket.
 func runPing(args []string) error {
 	fs := flag.NewFlagSet("ping", flag.ContinueOnError)
 	configPath := fs.String("config", "", "yaml of a running node (uses its control socket)")
@@ -216,6 +222,7 @@ func runPing(args []string) error {
 	return nil
 }
 
+// runTraceroute runs an overlay traceroute via a running node's control socket.
 func runTraceroute(args []string) error {
 	fs := flag.NewFlagSet("traceroute", flag.ContinueOnError)
 	configPath := fs.String("config", "", "yaml of a running node (uses its control socket)")
@@ -300,6 +307,7 @@ func runTraceroute(args []string) error {
 	return nil
 }
 
+// runCA handles ca init, sign, and bootstrap subcommands for mesh certificates.
 func runCA(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: hopscotch ca init|sign|bootstrap")

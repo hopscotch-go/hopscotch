@@ -25,6 +25,7 @@ type device struct {
 	name string
 }
 
+// Open creates a macOS utun interface for overlay IPv6 traffic.
 func Open() (Device, error) {
 	fd, err := unix.Socket(unix.AF_SYSTEM, unix.SOCK_DGRAM, sysprotoControl)
 	if err != nil {
@@ -55,8 +56,10 @@ func Open() (Device, error) {
 	return &device{f: os.NewFile(uintptr(fd), name), name: name}, nil
 }
 
+// Name returns the kernel-assigned utun interface name.
 func (d *device) Name() string { return d.name }
 
+// ReadPacket reads the next IPv6 packet from the utun device.
 func (d *device) ReadPacket() ([]byte, error) {
 	buf := make([]byte, 4+MTU)
 	for {
@@ -77,6 +80,7 @@ func (d *device) ReadPacket() ([]byte, error) {
 	}
 }
 
+// WritePacket writes an IPv6 packet to the utun device.
 func (d *device) WritePacket(pkt []byte) error {
 	buf := make([]byte, 4+len(pkt))
 	binary.BigEndian.PutUint32(buf[:4], unix.AF_INET6)
@@ -85,6 +89,7 @@ func (d *device) WritePacket(pkt []byte) error {
 	return err
 }
 
+// Close releases the utun file descriptor.
 func (d *device) Close() error { return d.f.Close() }
 
 const (
@@ -104,6 +109,7 @@ type in6AliasReq struct {
 	pltime    uint32
 }
 
+// Configure assigns the ULA address and, for gateways, an fd00::/8 route on macOS.
 func Configure(d Device, opts Opts) error {
 	ip := opts.IP.To16()
 	if ip == nil {
@@ -125,6 +131,7 @@ func Configure(d Device, opts Opts) error {
 	return addInet6Route(name, dst, 8)
 }
 
+// sock6 builds a RawSockaddrInet6 for the given IPv6 address.
 func sock6(ip net.IP) unix.RawSockaddrInet6 {
 	var sa unix.RawSockaddrInet6
 	sa.Len = uint8(unix.SizeofSockaddrInet6)
@@ -133,6 +140,7 @@ func sock6(ip net.IP) unix.RawSockaddrInet6 {
 	return sa
 }
 
+// prefixMask6 returns a sockaddr mask with the given prefix length in bits.
 func prefixMask6(ones int) unix.RawSockaddrInet6 {
 	mask := make(net.IP, 16)
 	for i := 0; i < ones; i++ {
@@ -141,6 +149,7 @@ func prefixMask6(ones int) unix.RawSockaddrInet6 {
 	return sock6(mask)
 }
 
+// addInet6 adds an IPv6 address to the named interface via SIOCAIFADDR_IN6.
 func addInet6(name string, ip net.IP, ones int) error {
 	var req in6AliasReq
 	copy(req.name[:], name)
@@ -161,6 +170,7 @@ func addInet6(name string, ip net.IP, ones int) error {
 	return errno
 }
 
+// addInet6Route installs a static IPv6 route out the named interface.
 func addInet6Route(name string, dst net.IP, ones int) error {
 	ifi, err := net.InterfaceByName(name)
 	if err != nil {
@@ -201,6 +211,7 @@ func addInet6Route(name string, dst net.IP, ones int) error {
 	return err
 }
 
+// setMTU sets the interface MTU via SIOCSIFMTU.
 func setMTU(name string, mtu int) error {
 	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, 0)
 	if err != nil {

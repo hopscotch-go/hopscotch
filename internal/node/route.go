@@ -31,6 +31,7 @@ type RouteInfo struct {
 	Metric int
 }
 
+// onSessionUp installs a direct RIB route for a new peer and advertises.
 func (n *Node) onSessionUp(s *session) {
 	dest := s.id.ULA().String()
 	n.routeMu.Lock()
@@ -44,6 +45,7 @@ func (n *Node) onSessionUp(s *session) {
 	n.advertiseRoutes()
 }
 
+// onSessionDown withdraws RIB entries via a dead peer and re-advertises.
 func (n *Node) onSessionDown(s *session) {
 	if s == nil {
 		return
@@ -70,6 +72,7 @@ func (n *Node) onSessionDown(s *session) {
 	}
 }
 
+// handleRoutes applies a peer's distance-vector update to the RIB.
 func (n *Node) handleRoutes(from *session, msg proto.Message) {
 	if from == nil {
 		return
@@ -129,12 +132,14 @@ func (n *Node) handleRoutes(from *session, msg proto.Message) {
 	}
 }
 
+// advertiseRoutes pushes this node's RIB view to all live sessions.
 func (n *Node) advertiseRoutes() {
 	for _, s := range n.sessionList() {
 		n.sendRoutesTo(s)
 	}
 }
 
+// sendRoutesTo sends a split-horizon route advertisement to s.
 func (n *Node) sendRoutesTo(s *session) {
 	if s == nil {
 		return
@@ -193,6 +198,7 @@ func (n *Node) Routes() []RouteInfo {
 	return out
 }
 
+// logRoutes logs a RIB snapshot after an update.
 func (n *Node) logRoutes(reason, detail string) {
 	routes := n.Routes()
 	if detail != "" {
@@ -205,6 +211,7 @@ func (n *Node) logRoutes(reason, detail string) {
 	}
 }
 
+// ulaLabel maps a ULA string to a human-readable name for logs.
 func (n *Node) ulaLabel(ula string) string {
 	if ula == n.id.ULA().String() {
 		return n.hopName()
@@ -230,6 +237,7 @@ func (n *Node) ulaLabel(ula string) string {
 	return ula
 }
 
+// idLabel maps a NodeID to a display name for logs.
 func (n *Node) idLabel(id identity.NodeID) string {
 	if id == n.id {
 		return n.hopName()
@@ -243,6 +251,7 @@ func (n *Node) idLabel(id identity.NodeID) string {
 	return id.Short()
 }
 
+// routePeerName prefers the first cert name, else the short id.
 func routePeerName(id identity.NodeID, names []string) string {
 	if len(names) > 0 {
 		return names[0]
@@ -282,6 +291,7 @@ func (n *Node) RouteMetric(dst net.IP) int {
 	return e.metric
 }
 
+// waitRoute blocks until dst appears in the RIB or timeout elapses.
 func (n *Node) waitRoute(dst net.IP, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {

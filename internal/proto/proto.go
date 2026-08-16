@@ -46,6 +46,7 @@ type Hello struct {
 	Listen []string `json:"listen"`
 }
 
+// Write marshals m as length-prefixed JSON onto w.
 func Write(w io.Writer, m Message) error {
 	b, err := json.Marshal(m)
 	if err != nil {
@@ -60,6 +61,7 @@ func Write(w io.Writer, m Message) error {
 	return err
 }
 
+// Read consumes one length-prefixed JSON message from r.
 func Read(r io.Reader) (Message, error) {
 	var hdr [4]byte
 	if _, err := io.ReadFull(r, hdr[:]); err != nil {

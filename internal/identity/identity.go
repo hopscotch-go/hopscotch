@@ -17,18 +17,22 @@ const ALPN = "hopscotch"
 // Tailscale overlay IPs which a directory assigns.
 type NodeID [32]byte
 
+// IDFromPublic derives a NodeID as SHA-256 of an ed25519 public key.
 func IDFromPublic(pub ed25519.PublicKey) NodeID {
 	return sha256.Sum256(pub)
 }
 
+// Short returns the first four bytes of the NodeID as hex.
 func (id NodeID) Short() string {
 	return fmt.Sprintf("%x", id[:4])
 }
 
+// Hex returns the full NodeID as lowercase hex.
 func (id NodeID) Hex() string {
 	return fmt.Sprintf("%x", id[:])
 }
 
+// ParsePublicKey decodes a 64-character hex ed25519 public key.
 func ParsePublicKey(s string) (ed25519.PublicKey, error) {
 	b, err := hex.DecodeString(s)
 	if err != nil || len(b) != ed25519.PublicKeySize {
@@ -37,6 +41,7 @@ func ParsePublicKey(s string) (ed25519.PublicKey, error) {
 	return ed25519.PublicKey(b), nil
 }
 
+// PublicHex encodes an ed25519 public key as lowercase hex.
 func PublicHex(pub ed25519.PublicKey) string {
 	return hex.EncodeToString(pub)
 }
@@ -70,11 +75,13 @@ func ResolverULA() net.IP {
 	return ip
 }
 
+// IsResolverULA reports whether ip is the overlay nameserver address.
 func IsResolverULA(ip net.IP) bool {
 	got := ip.To16()
 	return got != nil && got.Equal(ResolverULA())
 }
 
+// LoadOrCreate returns an ed25519 key from path, creating one if needed.
 func LoadOrCreate(path string) (ed25519.PrivateKey, error) {
 	if path == "" {
 		_, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -93,6 +100,7 @@ func LoadOrCreate(path string) (ed25519.PrivateKey, error) {
 	return priv, nil
 }
 
+// PublicFromCerts returns the ed25519 public key from the leaf certificate.
 func PublicFromCerts(certs []*x509.Certificate) (ed25519.PublicKey, error) {
 	if len(certs) == 0 {
 		return nil, fmt.Errorf("peer sent no certificate")

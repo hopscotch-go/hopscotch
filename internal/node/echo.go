@@ -27,10 +27,12 @@ type EchoResult struct {
 	RTT  time.Duration
 }
 
+// echoKey builds the map key for an in-flight named-echo RPC.
 func echoKey(origin string, rpc uint64) string {
 	return origin + "-" + strconv.FormatUint(rpc, 10)
 }
 
+// hopName returns this node's preferred display name for echo paths.
 func (n *Node) hopName() string {
 	if len(n.names) > 0 {
 		return n.names[0]
@@ -38,6 +40,7 @@ func (n *Node) hopName() string {
 	return n.id.Short()
 }
 
+// hasName reports whether name is one of this node's overlay names.
 func (n *Node) hasName(name string) bool {
 	for _, nm := range n.names {
 		if nm == name {
@@ -47,12 +50,14 @@ func (n *Node) hasName(name string) bool {
 	return false
 }
 
+// session returns the live session for id, if any.
 func (n *Node) session(id identity.NodeID) *session {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return n.sessions[id]
 }
 
+// sessionByName finds a live session advertising the given overlay name.
 func (n *Node) sessionByName(name string) *session {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -66,6 +71,7 @@ func (n *Node) sessionByName(name string) *session {
 	return nil
 }
 
+// sessionList returns a snapshot of live peer sessions.
 func (n *Node) sessionList() []*session {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -76,6 +82,7 @@ func (n *Node) sessionList() []*session {
 	return out
 }
 
+// Echo runs a named-echo flood to measure path and RTT to name.
 func (n *Node) Echo(ctx context.Context, rawName string) (EchoResult, error) {
 	name, err := identity.ParseName(rawName)
 	if err != nil {
@@ -114,6 +121,7 @@ func (n *Node) Echo(ctx context.Context, rawName string) (EchoResult, error) {
 	}
 }
 
+// handleEcho processes an inbound echo on the control plane.
 func (n *Node) handleEcho(from *session, msg proto.Message) {
 	name, err := identity.ParseName(msg.Name)
 	if err != nil {
@@ -151,6 +159,7 @@ func (n *Node) handleEcho(from *session, msg proto.Message) {
 	}
 }
 
+// dispatchEcho forwards an echo toward a named session or floods peers.
 func (n *Node) dispatchEcho(from *session, msg proto.Message) error {
 	if dest := n.sessionByName(msg.Name); dest != nil && dest != from {
 		return n.write(dest, msg)
@@ -176,10 +185,12 @@ func (n *Node) dispatchEcho(from *session, msg proto.Message) error {
 	return nil
 }
 
+// completeEcho delivers an echo reply/error to the waiting waiter.
 func (n *Node) completeEcho(msg proto.Message) {
 	n.finishEcho(echoKey(msg.Origin, msg.RPC), msg)
 }
 
+// finishEcho completes or relays an echo response for key.
 func (n *Node) finishEcho(key string, msg proto.Message) {
 	n.mu.Lock()
 	w, ok := n.echoWait[key]
@@ -202,6 +213,7 @@ func (n *Node) finishEcho(key string, msg proto.Message) {
 	}
 }
 
+// clearEcho removes a pending echo waiter.
 func (n *Node) clearEcho(key string) {
 	n.mu.Lock()
 	delete(n.echoWait, key)

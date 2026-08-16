@@ -11,10 +11,12 @@ type Endpoint struct {
 	Addr    string // host:port
 }
 
+// String formats the endpoint as network:host:port.
 func (e Endpoint) String() string {
 	return e.Network + ":" + e.Addr
 }
 
+// Parse splits an endpoint string into network and host:port, applying defaultNet when omitted.
 func Parse(s, defaultNet string) (Endpoint, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -39,6 +41,7 @@ func Parse(s, defaultNet string) (Endpoint, error) {
 	return Endpoint{Network: network, Addr: addr}, nil
 }
 
+// Host returns the host portion of a host:port address, or addr if unparsable.
 func Host(addr string) string {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {

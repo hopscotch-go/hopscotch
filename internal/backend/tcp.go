@@ -9,6 +9,7 @@ import (
 
 type TCPDialer struct{}
 
+// Dial opens a length-prefixed TCP session to address.
 func (TCPDialer) Dial(ctx context.Context, address string) (Session, error) {
 	var d net.Dialer
 	c, err := d.DialContext(ctx, "tcp", address)
@@ -22,6 +23,7 @@ type TCPListener struct {
 	ln *net.TCPListener
 }
 
+// NewTCPListener binds a TCP listener on address.
 func NewTCPListener(address string) (*TCPListener, error) {
 	addr, err := net.ResolveTCPAddr("tcp", address)
 	if err != nil {
@@ -34,10 +36,13 @@ func NewTCPListener(address string) (*TCPListener, error) {
 	return &TCPListener{ln: ln}, nil
 }
 
+// Addr returns the listener's local address.
 func (l *TCPListener) Addr() net.Addr { return l.ln.Addr() }
 
+// Close shuts down the TCP listener.
 func (l *TCPListener) Close() error { return l.ln.Close() }
 
+// Start accepts inbound TCP connections and emits Session values until ctx is done.
 func (l *TCPListener) Start(ctx context.Context) (<-chan Session, error) {
 	ch := make(chan Session)
 	go func() {
@@ -70,6 +75,7 @@ type tcpSession struct {
 	framer StreamFramer
 }
 
+// newTCPSession wraps a TCP connection as a framed Session.
 func newTCPSession(c net.Conn) *tcpSession {
 	if tc, ok := c.(*net.TCPConn); ok {
 		_ = tc.SetNoDelay(true)
@@ -77,9 +83,13 @@ func newTCPSession(c net.Conn) *tcpSession {
 	return &tcpSession{c: c}
 }
 
-func (s *tcpSession) LocalAddr() net.Addr  { return wrapAddr("tcp", s.c.LocalAddr()) }
+// LocalAddr returns the local address of the TCP session.
+func (s *tcpSession) LocalAddr() net.Addr { return wrapAddr("tcp", s.c.LocalAddr()) }
+
+// RemoteAddr returns the remote address of the TCP session.
 func (s *tcpSession) RemoteAddr() net.Addr { return wrapAddr("tcp", s.c.RemoteAddr()) }
 
+// Send writes a length-prefixed datagram on the TCP connection.
 func (s *tcpSession) Send(data []byte) error {
 	buf, err := EncodeFrame(data)
 	if err != nil {
@@ -89,6 +99,7 @@ func (s *tcpSession) Send(data []byte) error {
 	return err
 }
 
+// Recv reads the next length-prefixed datagram, or ErrTimeout if none arrives in time.
 func (s *tcpSession) Recv(timeout time.Duration) ([]byte, error) {
 	buf := make([]byte, 64*1024)
 	for {
@@ -124,6 +135,7 @@ func (s *tcpSession) Recv(timeout time.Duration) ([]byte, error) {
 	}
 }
 
+// Close closes the underlying TCP connection.
 func (s *tcpSession) Close() error {
 	return s.c.Close()
 }

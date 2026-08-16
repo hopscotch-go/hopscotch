@@ -11,6 +11,7 @@ import (
 	"time"
 )
 
+// CreateCA generates a self-signed ed25519 mesh CA certificate and key.
 func CreateCA() (*x509.Certificate, ed25519.PrivateKey, error) {
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -42,6 +43,7 @@ func CreateCA() (*x509.Certificate, ed25519.PrivateKey, error) {
 	return cert, priv, nil
 }
 
+// SignNode issues a node certificate for nodePub with the given hopscotch names.
 func SignNode(ca *x509.Certificate, caKey ed25519.PrivateKey, nodePub ed25519.PublicKey, names ...string) (*x509.Certificate, error) {
 	names, err := NormalizeNames(names)
 	if err != nil {
@@ -70,6 +72,7 @@ func SignNode(ca *x509.Certificate, caKey ed25519.PrivateKey, nodePub ed25519.Pu
 	return x509.ParseCertificate(der)
 }
 
+// InitCAFiles creates a new CA key and cert at the given paths.
 func InitCAFiles(keyPath, certPath string) error {
 	if fileExists(keyPath) {
 		return fmt.Errorf("%s already exists", keyPath)
@@ -87,6 +90,7 @@ func InitCAFiles(keyPath, certPath string) error {
 	return WriteCert(certPath, cert)
 }
 
+// SignNodeFiles loads CA and identity material and writes a signed node cert.
 func SignNodeFiles(caKeyPath, caCertPath, identityPath, outPath string, names ...string) error {
 	caKey, err := LoadKey(caKeyPath)
 	if err != nil {
@@ -108,6 +112,7 @@ func SignNodeFiles(caKeyPath, caCertPath, identityPath, outPath string, names ..
 	return WriteCert(outPath, cert)
 }
 
+// TLSCertFromSigned builds a tls.Certificate from a matching key and node cert.
 func TLSCertFromSigned(priv ed25519.PrivateKey, nodeCert *x509.Certificate) (tls.Certificate, error) {
 	pub := priv.Public().(ed25519.PublicKey)
 	want, ok := nodeCert.PublicKey.(ed25519.PublicKey)
@@ -121,6 +126,7 @@ func TLSCertFromSigned(priv ed25519.PrivateKey, nodeCert *x509.Certificate) (tls
 	}, nil
 }
 
+// VerifyChain validates a peer certificate chain against roots and returns the leaf.
 func VerifyChain(rawCerts [][]byte, roots *x509.CertPool) (*x509.Certificate, error) {
 	if len(rawCerts) == 0 {
 		return nil, fmt.Errorf("no peer certificate")
@@ -152,6 +158,7 @@ func VerifyChain(rawCerts [][]byte, roots *x509.CertPool) (*x509.Certificate, er
 	return leaf, nil
 }
 
+// randomSerial returns a random 128-bit certificate serial number.
 func randomSerial() (*big.Int, error) {
 	return rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 }

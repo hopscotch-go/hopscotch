@@ -14,8 +14,13 @@ type datagram struct {
 
 type timeoutErr struct{}
 
-func (timeoutErr) Error() string   { return "i/o timeout" }
-func (timeoutErr) Timeout() bool   { return true }
+// Error implements the error interface for deadline expiry.
+func (timeoutErr) Error() string { return "i/o timeout" }
+
+// Timeout reports that the error was caused by a timeout.
+func (timeoutErr) Timeout() bool { return true }
+
+// Temporary reports that the timeout may be retried.
 func (timeoutErr) Temporary() bool { return true }
 
 // Mux is a net.PacketConn over a set of backend Sessions.
@@ -33,6 +38,7 @@ type Mux struct {
 	deadlineWake chan struct{}
 }
 
+// NewMux creates an empty packet mux bound to local.
 func NewMux(local net.Addr) *Mux {
 	return &Mux{
 		local:        local,
@@ -43,6 +49,7 @@ func NewMux(local net.Addr) *Mux {
 	}
 }
 
+// Attach registers a backend session and starts reading datagrams from it.
 func (m *Mux) Attach(s Session) {
 	key := s.RemoteAddr().String()
 	m.mu.Lock()
@@ -58,6 +65,7 @@ func (m *Mux) Attach(s Session) {
 	go m.readLoop(s, key)
 }
 
+// readLoop forwards datagrams from a session into the mux until error or close.
 func (m *Mux) readLoop(s Session, key string) {
 	defer func() {
 		m.mu.Lock()
@@ -87,6 +95,7 @@ func (m *Mux) readLoop(s Session, key string) {
 	}
 }
 
+// ReadFrom copies the next inbound datagram into p, respecting the read deadline.
 func (m *Mux) ReadFrom(p []byte) (int, net.Addr, error) {
 	for {
 		m.deadlineMu.Lock()
@@ -126,6 +135,7 @@ func (m *Mux) ReadFrom(p []byte) (int, net.Addr, error) {
 	}
 }
 
+// WriteTo sends p to addr via the attached session for that peer.
 func (m *Mux) WriteTo(p []byte, addr net.Addr) (int, error) {
 	if addr == nil {
 		return 0, errors.New("nil addr")
@@ -142,8 +152,10 @@ func (m *Mux) WriteTo(p []byte, addr net.Addr) (int, error) {
 	return len(p), nil
 }
 
+// LocalAddr returns the mux's local address.
 func (m *Mux) LocalAddr() net.Addr { return m.local }
 
+// Close shuts down the mux and all attached sessions.
 func (m *Mux) Close() error {
 	m.closeOnce.Do(func() {
 		close(m.closed)
@@ -157,6 +169,7 @@ func (m *Mux) Close() error {
 	return nil
 }
 
+// SetDeadline sets both read and write deadlines.
 func (m *Mux) SetDeadline(t time.Time) error {
 	if err := m.SetReadDeadline(t); err != nil {
 		return err
@@ -164,6 +177,7 @@ func (m *Mux) SetDeadline(t time.Time) error {
 	return m.SetWriteDeadline(t)
 }
 
+// SetReadDeadline sets the deadline for ReadFrom.
 func (m *Mux) SetReadDeadline(t time.Time) error {
 	m.deadlineMu.Lock()
 	m.readDeadline = t
@@ -175,10 +189,13 @@ func (m *Mux) SetReadDeadline(t time.Time) error {
 	return nil
 }
 
+// SetWriteDeadline is a no-op; writes are not deadline-gated.
 func (m *Mux) SetWriteDeadline(time.Time) error { return nil }
 
 // Avoid quic-go's "not a UDPConn" buffer-size warning; this is not a socket.
-func (m *Mux) SetReadBuffer(int) error  { return nil }
+func (m *Mux) SetReadBuffer(int) error { return nil }
+
+// SetWriteBuffer is a no-op socket buffer stub for quic-go compatibility.
 func (m *Mux) SetWriteBuffer(int) error { return nil }
 
 var _ net.PacketConn = (*Mux)(nil)

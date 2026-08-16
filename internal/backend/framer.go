@@ -24,6 +24,7 @@ type StreamFramer struct {
 	err error
 }
 
+// EncodeFrame length-prefixes payload for sending on a stream.
 func EncodeFrame(payload []byte) ([]byte, error) {
 	if len(payload) > maxFrame {
 		return nil, ErrFrameTooLarge
@@ -34,6 +35,7 @@ func EncodeFrame(payload []byte) ([]byte, error) {
 	return out, nil
 }
 
+// Write appends stream bytes and records an error if a frame length is too large.
 func (f *StreamFramer) Write(p []byte) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -49,12 +51,14 @@ func (f *StreamFramer) Write(p []byte) {
 	}
 }
 
+// Err returns any framing error observed while buffering.
 func (f *StreamFramer) Err() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.err
 }
 
+// HasFrame reports whether a complete length-prefixed frame is buffered.
 func (f *StreamFramer) HasFrame() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -62,6 +66,7 @@ func (f *StreamFramer) HasFrame() bool {
 	return ok
 }
 
+// NextFrame consumes and returns the next complete frame from the buffer.
 func (f *StreamFramer) NextFrame() ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -77,6 +82,7 @@ func (f *StreamFramer) NextFrame() ([]byte, error) {
 	return payload, nil
 }
 
+// peek reports the next complete frame length if one is fully buffered.
 func (f *StreamFramer) peek() (int, bool) {
 	if f.err != nil || len(f.buf) < frameHeader {
 		return 0, false

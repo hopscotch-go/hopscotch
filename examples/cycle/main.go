@@ -36,6 +36,7 @@ import (
 	"github.com/hopscotch-go/hopscotch/internal/tun"
 )
 
+// main boots the in-process cycle mesh demo and runs echo, traceroute, and overlay probes.
 func main() {
 	dir := flag.String("dir", filepath.Join("examples", ".local", "cycle"), "cert/config dir")
 	verbose := flag.Bool("v", false, "print raw per-node hopscotch logs")
@@ -231,6 +232,7 @@ func main() {
 	}
 }
 
+// logMeshRoutes prints each node's distance-vector RIB with destination names.
 func logMeshRoutes(nodes []*node.Node) {
 	ulaName := make(map[string]string, len(nodes))
 	for _, n := range nodes {
@@ -258,11 +260,13 @@ func logMeshRoutes(nodes []*node.Node) {
 	}
 }
 
+// ensureCerts bootstraps CA and per-node certs for the cycle demo.
 func ensureCerts(dir string, names []string) error {
 	slog.Info("boot", "phase", "certs", "nodes", len(names), "dir", dir)
 	return identity.BootstrapDir(dir, names)
 }
 
+// probeOverlay injects an IPv6 ICMP echo from foo toward blaz over the TUN path.
 func probeOverlay(foo, blaz *node.Node, hopLimit uint8, shortestHops int) {
 	dev := tun.NewMem()
 	defer dev.Close()
@@ -314,11 +318,13 @@ func probeOverlay(foo, blaz *node.Node, hopLimit uint8, shortestHops int) {
 	}
 }
 
+// fatal logs an error and exits the process.
 func fatal(msg string, args ...any) {
 	slog.Error(msg, args...)
 	os.Exit(1)
 }
 
+// waitPeers blocks until n has at least want peers or the deadline passes.
 func waitPeers(n *node.Node, want int, d time.Duration) {
 	deadline := time.Now().Add(d)
 	for time.Now().Before(deadline) {
@@ -330,6 +336,7 @@ func waitPeers(n *node.Node, want int, d time.Duration) {
 	fatal("wait peers", "names", n.Names(), "want", want, "got", n.PeerCount())
 }
 
+// waitRoute blocks until n has a positive route metric to dst or the deadline passes.
 func waitRoute(n *node.Node, dst net.IP, d time.Duration) {
 	if n.RouteMetric(dst) > 0 {
 		return
@@ -344,6 +351,7 @@ func waitRoute(n *node.Node, dst net.IP, d time.Duration) {
 	fatal("wait route", "names", n.Names(), "dst", dst.String(), "metric", n.RouteMetric(dst))
 }
 
+// ipv6ICMPEcho builds a raw IPv6 ICMPv6 echo-request packet.
 func ipv6ICMPEcho(src, dst net.IP, hop uint8) []byte {
 	p := make([]byte, 56)
 	p[0] = 0x60
@@ -361,6 +369,7 @@ func ipv6ICMPEcho(src, dst net.IP, hop uint8) []byte {
 	return p
 }
 
+// icmpv6Checksum computes the ICMPv6 checksum for a full IPv6 packet.
 func icmpv6Checksum(pkt []byte) uint16 {
 	var sum uint32
 	plen := uint32(len(pkt) - 40)

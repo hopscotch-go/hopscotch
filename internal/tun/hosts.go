@@ -21,6 +21,7 @@ type Host struct {
 	IP   net.IP
 }
 
+// ParseHostsFile reads mesh ULA host entries from a hosts-format file.
 func ParseHostsFile(path string) ([]Host, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -83,6 +84,7 @@ func StripHopscotchHosts() error {
 	return os.WriteFile(systemHosts, []byte(next), 0o644)
 }
 
+// stripHostsBlock removes a hopscotch BEGIN/END section from hosts file text.
 func stripHostsBlock(existing string) string {
 	var kept []string
 	skip := false

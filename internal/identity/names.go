@@ -9,6 +9,7 @@ import (
 
 const NameURIScheme = "hopscotch"
 
+// ParseName validates and lowercases a hopscotch node name.
 func ParseName(s string) (string, error) {
 	s = strings.ToLower(strings.TrimSpace(s))
 	if s == "" {
@@ -30,6 +31,7 @@ func ParseName(s string) (string, error) {
 	return s, nil
 }
 
+// NormalizeNames parses names and returns unique values in first-seen order.
 func NormalizeNames(names []string) ([]string, error) {
 	seen := make(map[string]bool)
 	var out []string
@@ -47,10 +49,12 @@ func NormalizeNames(names []string) ([]string, error) {
 	return out, nil
 }
 
+// NameURI builds a hopscotch:name URI for certificate SANs.
 func NameURI(name string) *url.URL {
 	return &url.URL{Scheme: NameURIScheme, Opaque: name}
 }
 
+// NamesFromCert extracts hopscotch URI names from a certificate's SANs.
 func NamesFromCert(cert *x509.Certificate) []string {
 	if cert == nil {
 		return nil

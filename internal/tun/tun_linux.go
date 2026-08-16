@@ -29,6 +29,7 @@ type device struct {
 	name string
 }
 
+// Open creates a Linux TUN device named hopscotch0 for overlay IPv6 traffic.
 func Open() (Device, error) {
 	fd, err := unix.Open("/dev/net/tun", unix.O_RDWR|unix.O_CLOEXEC, 0)
 	if err != nil {
@@ -48,8 +49,10 @@ func Open() (Device, error) {
 	return &device{f: os.NewFile(uintptr(fd), name), name: name}, nil
 }
 
+// Name returns the TUN interface name.
 func (d *device) Name() string { return d.name }
 
+// ReadPacket reads the next raw IP packet from the TUN device.
 func (d *device) ReadPacket() ([]byte, error) {
 	buf := make([]byte, 2048)
 	n, err := d.f.Read(buf)
@@ -61,13 +64,16 @@ func (d *device) ReadPacket() ([]byte, error) {
 	return pkt, nil
 }
 
+// WritePacket writes a raw IP packet to the TUN device.
 func (d *device) WritePacket(pkt []byte) error {
 	_, err := d.f.Write(pkt)
 	return err
 }
 
+// Close releases the TUN file descriptor.
 func (d *device) Close() error { return d.f.Close() }
 
+// Configure assigns the ULA address and, for gateways, an fd00::/8 route on Linux.
 func Configure(d Device, opts Opts) error {
 	ip := opts.IP.To16()
 	if ip == nil {
@@ -95,6 +101,7 @@ func Configure(d Device, opts Opts) error {
 	return nlRouteAdd(uint32(ifi.Index), unix.AF_INET6, dst, 8)
 }
 
+// linkUpMTU brings the interface up and sets its MTU.
 func linkUpMTU(name string) error {
 	s, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
@@ -116,6 +123,7 @@ func linkUpMTU(name string) error {
 	return unix.IoctlIfreq(s, unix.SIOCSIFMTU, ifr)
 }
 
+// nlAddrAdd adds an address to an interface via RTM_NEWADDR.
 func nlAddrAdd(index uint32, family uint8, ip net.IP, ones int) error {
 	ifa := unix.IfAddrmsg{
 		Family:    family,
@@ -136,6 +144,7 @@ func nlAddrAdd(index uint32, family uint8, ip net.IP, ones int) error {
 	return nlReq(unix.RTM_NEWADDR, unix.NLM_F_REQUEST|unix.NLM_F_ACK|unix.NLM_F_CREATE|unix.NLM_F_REPLACE, payload)
 }
 
+// nlRouteAdd installs a route via RTM_NEWROUTE.
 func nlRouteAdd(index uint32, family uint8, dst net.IP, ones int) error {
 	rt := unix.RtMsg{
 		Family:   family,
@@ -154,6 +163,7 @@ func nlRouteAdd(index uint32, family uint8, dst net.IP, ones int) error {
 	return nlReq(unix.RTM_NEWROUTE, unix.NLM_F_REQUEST|unix.NLM_F_ACK|unix.NLM_F_CREATE|unix.NLM_F_REPLACE, payload)
 }
 
+// nlReq sends a netlink request and checks the NLMSG_ERROR acknowledgment.
 func nlReq(typ, flags uint16, payload []byte) error {
 	h := unix.NlMsghdr{
 		Len:   uint32(unix.SizeofNlMsghdr + len(payload)),
@@ -199,6 +209,7 @@ func nlReq(typ, flags uint16, payload []byte) error {
 	return errno
 }
 
+// nla encodes a netlink attribute with the given type and payload.
 func nla(typ uint16, data []byte) []byte {
 	l := unix.SizeofRtAttr + len(data)
 	pad := (l + 3) &^ 3
@@ -209,12 +220,14 @@ func nla(typ uint16, data []byte) []byte {
 	return b
 }
 
+// nlaU32 encodes a uint32 netlink attribute.
 func nlaU32(typ uint16, v uint32) []byte {
 	var d [4]byte
 	binary.NativeEndian.PutUint32(d[:], v)
 	return nla(typ, d[:])
 }
 
+// structBytes returns a byte view of the in-memory representation of p.
 func structBytes[T any](p *T) []byte {
 	n := unsafe.Sizeof(*p)
 	return unsafe.Slice((*byte)(unsafe.Pointer(p)), n)

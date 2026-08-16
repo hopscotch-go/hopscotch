@@ -9,8 +9,10 @@ type HopAddr struct {
 	Addr net.Addr
 }
 
+// Network returns the backend network name (for example "tcp" or "udp").
 func (h HopAddr) Network() string { return h.Net }
 
+// String formats the hop as network:address for mux keys and logging.
 func (h HopAddr) String() string {
 	if h.Addr == nil {
 		return h.Net
@@ -18,6 +20,7 @@ func (h HopAddr) String() string {
 	return h.Net + ":" + h.Addr.String()
 }
 
+// wrapAddr tags addr with network, leaving an existing HopAddr unchanged.
 func wrapAddr(network string, addr net.Addr) net.Addr {
 	if addr == nil {
 		return HopAddr{Net: network}

@@ -10,6 +10,7 @@ import (
 	"github.com/hopscotch-go/hopscotch/internal/proto"
 )
 
+// listenControl opens the unix control socket for local ping/traceroute.
 func (n *Node) listenControl() error {
 	if err := os.MkdirAll(filepath.Dir(n.controlPath), 0o700); err != nil {
 		return err
@@ -29,6 +30,7 @@ func (n *Node) listenControl() error {
 	return nil
 }
 
+// controlLoop accepts control-socket connections.
 func (n *Node) controlLoop() {
 	for {
 		conn, err := n.control.Accept()
@@ -39,6 +41,7 @@ func (n *Node) controlLoop() {
 	}
 }
 
+// handleControl serves one control-plane request over a unix connection.
 func (n *Node) handleControl(conn net.Conn) {
 	defer conn.Close()
 	msg, err := proto.Read(conn)

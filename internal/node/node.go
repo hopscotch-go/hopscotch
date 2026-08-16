@@ -27,19 +27,19 @@ import (
 )
 
 type Config struct {
-	Listen    string   // convenience: one bind; default network is udp
-	Listens   []string // "udp:host:port" and/or "tcp:host:port" (repeatable)
-	Network   string   // default for unprefixed Listen/Listens: udp or tcp
-	Peers     []peers.Peer
-	PeersFile string
-	Identity  string
-	Cert      string // this node's CA-signed cert PEM
-	CA        string // mesh CA cert PEM; trust any peer this CA signed
+	Listen     string   // convenience: one bind; default network is udp
+	Listens    []string // "udp:host:port" and/or "tcp:host:port" (repeatable)
+	Network    string   // default for unprefixed Listen/Listens: udp or tcp
+	Peers      []peers.Peer
+	PeersFile  string
+	Identity   string
+	Cert       string // this node's CA-signed cert PEM
+	CA         string // mesh CA cert PEM; trust any peer this CA signed
 	Control    string // unix socket for local commands (ping, traceroute)
 	Tun        bool   // kernel TUN
 	Gateway    bool   // this TUN owns fd00::/8 and overlay DNS for the host
-	NoListen   bool // if true, do not bind (pure dial-only; cannot be dialed back)
-	LogOverlay bool // log every overlay nextHop forward
+	NoListen   bool   // if true, do not bind (pure dial-only; cannot be dialed back)
+	LogOverlay bool   // log every overlay nextHop forward
 	Log        *log.Logger
 }
 
@@ -95,6 +95,7 @@ type Node struct {
 	routes  map[string]ribEntry // ULA string → next hop NodeID + metric
 }
 
+// New constructs a Node from cfg without starting listeners or dials.
 func New(cfg Config) (*Node, error) {
 	if cfg.Network == "" {
 		cfg.Network = "udp"
@@ -231,8 +232,10 @@ func New(cfg Config) (*Node, error) {
 	}, nil
 }
 
+// ID returns this node's mesh identity.
 func (n *Node) ID() identity.NodeID { return n.id }
 
+// AdvertiseAddr returns the primary underlay listen address advertised to peers.
 func (n *Node) AdvertiseAddr() string {
 	if len(n.advertise) == 0 {
 		return ""
@@ -240,10 +243,12 @@ func (n *Node) AdvertiseAddr() string {
 	return n.advertise[0]
 }
 
+// AdvertiseAddrs returns all underlay addresses this node advertises.
 func (n *Node) AdvertiseAddrs() []string {
 	return append([]string(nil), n.advertise...)
 }
 
+// AdvertiseByNetwork returns an advertised underlay address for the given network, or the primary if none match.
 func (n *Node) AdvertiseByNetwork(network string) string {
 	for _, a := range n.advertise {
 		ep, err := endpoint.Parse(a, "")
@@ -254,10 +259,12 @@ func (n *Node) AdvertiseByNetwork(network string) string {
 	return n.AdvertiseAddr()
 }
 
+// Names returns this node's overlay names from its CA cert.
 func (n *Node) Names() []string {
 	return append([]string(nil), n.names...)
 }
 
+// NamesOf returns overlay names learned for a peer session, if any.
 func (n *Node) NamesOf(id identity.NodeID) []string {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -267,6 +274,7 @@ func (n *Node) NamesOf(id identity.NodeID) []string {
 	return nil
 }
 
+// peerNamesFromConn extracts overlay peer names from the peer TLS certificate.
 func (n *Node) peerNamesFromConn(conn *quic.Conn) []string {
 	certs := conn.ConnectionState().TLS.PeerCertificates
 	if len(certs) == 0 {
@@ -275,6 +283,7 @@ func (n *Node) peerNamesFromConn(conn *quic.Conn) []string {
 	return identity.NamesFromCert(certs[0])
 }
 
+// peerLabel formats a peer as name(s) plus short id for logs.
 func peerLabel(id identity.NodeID, names []string) string {
 	if len(names) == 0 {
 		return id.Short()
@@ -282,12 +291,14 @@ func peerLabel(id identity.NodeID, names []string) string {
 	return strings.Join(names, ",") + " (" + id.Short() + ")"
 }
 
+// PeerCount returns the number of live peer sessions.
 func (n *Node) PeerCount() int {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return len(n.sessions)
 }
 
+// Start binds underlay listeners, starts QUIC, and begins peer maintenance.
 func (n *Node) Start() error {
 	mux := backend.NewMux(backend.HopAddr{Net: "mux"})
 	n.mux = mux
@@ -373,12 +384,14 @@ func (n *Node) Start() error {
 	return nil
 }
 
+// attachInbound feeds inbound underlay sessions into the QUIC mux.
 func (n *Node) attachInbound(ch <-chan backend.Session) {
 	for s := range ch {
 		n.mux.Attach(s)
 	}
 }
 
+// Close shuts down sessions, TUN, control socket, and listeners.
 func (n *Node) Close() {
 	n.cancel()
 	n.mu.Lock()
@@ -418,6 +431,7 @@ func (n *Node) Close() {
 	}
 }
 
+// acceptLoop accepts inbound QUIC connections on the underlay listener.
 func (n *Node) acceptLoop() {
 	for {
 		conn, err := n.ln.Accept(n.ctx)
@@ -437,6 +451,7 @@ func (n *Node) acceptLoop() {
 	}
 }
 
+// join dials configured peers with backoff until the node context ends.
 func (n *Node) join() {
 	addrs := n.peerAddrs()
 	backoff := time.Second
@@ -468,6 +483,7 @@ func (n *Node) join() {
 	}
 }
 
+// sleep waits for d or returns false if the node context is canceled.
 func (n *Node) sleep(d time.Duration) bool {
 	t := time.NewTimer(d)
 	defer t.Stop()
@@ -479,6 +495,7 @@ func (n *Node) sleep(d time.Duration) bool {
 	}
 }
 
+// sessionByAddr returns the live session for an underlay advertise address.
 func (n *Node) sessionByAddr(addr string) *session {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -490,6 +507,7 @@ func (n *Node) sessionByAddr(addr string) *session {
 	return nil
 }
 
+// peerAddrs lists configured peer underlay addresses excluding self.
 func (n *Node) peerAddrs() []string {
 	var out []string
 	for _, p := range n.peers {
@@ -501,6 +519,7 @@ func (n *Node) peerAddrs() []string {
 	return out
 }
 
+// isSelfAddr reports whether s matches one of this node's advertised underlay addresses.
 func (n *Node) isSelfAddr(s string) bool {
 	ep, err := endpoint.Parse(s, "udp")
 	if err != nil {
@@ -515,6 +534,7 @@ func (n *Node) isSelfAddr(s string) bool {
 	return false
 }
 
+// dial opens an underlay session and completes the QUIC hello handshake.
 func (n *Node) dial(addr string) (*session, error) {
 	if addr == "" || n.isSelfAddr(addr) {
 		return nil, errors.New("refusing to dial self")
@@ -559,6 +579,7 @@ func (n *Node) dial(addr string) (*session, error) {
 	return n.establish(conn, true, expect, addr)
 }
 
+// waitSessionByAddr waits briefly for another dial to finish establishing addr.
 func (n *Node) waitSessionByAddr(addr string) (*session, error) {
 	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
@@ -579,6 +600,7 @@ func (n *Node) waitSessionByAddr(addr string) (*session, error) {
 	return nil, fmt.Errorf("timeout waiting for %s", addr)
 }
 
+// establish completes the control-stream hello and registers a peer session.
 func (n *Node) establish(conn *quic.Conn, weDialed bool, expect ed25519.PublicKey, dialed string) (*session, error) {
 	var stream *quic.Stream
 	var err error
@@ -671,6 +693,7 @@ func (n *Node) establish(conn *quic.Conn, weDialed bool, expect ed25519.PublicKe
 	return sess, nil
 }
 
+// readLoop reads control-plane messages on the session's bidirectional stream.
 func (n *Node) readLoop(s *session) {
 	defer func() {
 		_ = s.conn.CloseWithError(0, "bye")
@@ -715,12 +738,14 @@ func (n *Node) readLoop(s *session) {
 	}
 }
 
+// write sends a control-plane message on the session stream.
 func (n *Node) write(s *session, m proto.Message) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return proto.Write(s.stream, m)
 }
 
+// maintainLoop periodically refreshes RIB advertisements and status logs.
 func (n *Node) maintainLoop() {
 	routes := time.NewTicker(routeRefresh)
 	defer routes.Stop()
@@ -738,6 +763,7 @@ func (n *Node) maintainLoop() {
 	}
 }
 
+// logStatus logs connected sessions and current RIB routes.
 func (n *Node) logStatus() {
 	n.mu.Lock()
 	nsess := len(n.sessions)
@@ -758,10 +784,12 @@ func (n *Node) logStatus() {
 	}
 }
 
+// serverTLS returns TLS config for inbound QUIC.
 func (n *Node) serverTLS() *tls.Config {
 	return n.baseTLS("", false)
 }
 
+// clientTLS returns TLS config for outbound QUIC dials.
 func (n *Node) clientTLS(serverName string) *tls.Config {
 	if serverName == "" {
 		serverName = "hopscotch"
@@ -769,6 +797,7 @@ func (n *Node) clientTLS(serverName string) *tls.Config {
 	return n.baseTLS(serverName, true)
 }
 
+// baseTLS builds shared TLS settings with mesh-CA peer verification.
 func (n *Node) baseTLS(serverName string, client bool) *tls.Config {
 	cfg := &tls.Config{
 		Certificates:          []tls.Certificate{n.tlsCert},
@@ -785,17 +814,20 @@ func (n *Node) baseTLS(serverName string, client bool) *tls.Config {
 	return cfg
 }
 
+// verifyPeer checks the peer certificate chain against the mesh CA.
 func (n *Node) verifyPeer(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 	_, err := identity.VerifyChain(rawCerts, n.caPool)
 	return err
 }
 
+// poolWith builds a CertPool containing only ca.
 func poolWith(ca *x509.Certificate) *x509.CertPool {
 	p := x509.NewCertPool()
 	p.AddCert(ca)
 	return p
 }
 
+// advertiseOf builds the underlay address peers should dial, resolving ephemeral ports.
 func advertiseOf(spec endpoint.Endpoint, bound net.Addr) string {
 	host, port, err := net.SplitHostPort(spec.Addr)
 	if err != nil {
@@ -813,6 +845,7 @@ func advertiseOf(spec endpoint.Endpoint, bound net.Addr) string {
 	return endpoint.Endpoint{Network: spec.Network, Addr: net.JoinHostPort(host, port)}.String()
 }
 
+// canonicalAddrs parses and deduplicates advertised underlay addresses.
 func canonicalAddrs(in []string) []string {
 	var out []string
 	seen := map[string]bool{}
@@ -830,4 +863,3 @@ func canonicalAddrs(in []string) []string {
 	}
 	return out
 }
-
