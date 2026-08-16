@@ -211,6 +211,77 @@ func TestJoinRedials(t *testing.T) {
 	waitPeers(t, hub2, 1)
 }
 
+// Same peer identity dials again while the hub still holds the old session
+// (peer crash / debugger restart without a clean QUIC close). The hub must
+// accept the new connection instead of answering "duplicate".
+func TestReplaceLiveSessionOnRedial(t *testing.T) {
+	dir := t.TempDir()
+	caPath, caCert, caKey := writeCA(t, dir)
+	hub := startNode(t, dir, "hub", caPath, caCert, caKey, Config{
+		Listen:  "127.0.0.1:0",
+		Network: "udp",
+	})
+	defer hub.Close()
+	addr := hub.AdvertiseAddr()
+
+	idPath, certPath := signNode(t, dir, "spoke", caCert, caKey)
+	spoke1, err := New(Config{
+		Identity: idPath,
+		Cert:     certPath,
+		CA:       caPath,
+		Peers:    []peers.Peer{{Addr: addr}},
+		Log:      log.New(&testWriter{t: t, name: "spoke1"}, "", 0),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := spoke1.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitPeers(t, spoke1, 1)
+	waitPeers(t, hub, 1)
+	oldID := spoke1.ID()
+
+	// Leave spoke1's QUIC session up on the hub (no Close), and dial again
+	// with the same identity from a new process/socket.
+	spoke2, err := New(Config{
+		Identity: idPath,
+		Cert:     certPath,
+		CA:       caPath,
+		Peers:    []peers.Peer{{Addr: addr}},
+		Log:      log.New(&testWriter{t: t, name: "spoke2"}, "", 0),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := spoke2.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer spoke2.Close()
+	waitPeers(t, spoke2, 1)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if hub.PeerCount() == 1 && hub.NamesOf(oldID) != nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if hub.PeerCount() != 1 {
+		t.Fatalf("hub want 1 peer after replace, got %d", hub.PeerCount())
+	}
+	if got := hub.NamesOf(oldID); len(got) != 1 || got[0] != "spoke" {
+		t.Fatalf("hub names of spoke %v", got)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if _, err := spoke2.Echo(ctx, "hub"); err != nil {
+		t.Fatalf("echo over replaced session: %v", err)
+	}
+	spoke1.Close()
+}
+
 func startPair(t *testing.T, dir, network string) (*Node, *Node) {
 	t.Helper()
 	caPath, caCert, caKey := writeCA(t, dir)

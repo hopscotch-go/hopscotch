@@ -641,20 +641,23 @@ func (n *Node) establish(conn *quic.Conn, weDialed bool, expect ed25519.PublicKe
 		pending: make(map[uint64]chan proto.Message),
 	}
 
+	// Prefer the newest connection for a NodeID. A peer restart (or NAT remap)
+	// often leaves the old QUIC conn looking alive until idle timeout; rejecting
+	// as "duplicate" stranded redials for tens of seconds.
+	var old *session
 	n.mu.Lock()
 	if existing := n.sessions[pid]; existing != nil {
-		dead := existing.conn == nil || existing.conn.Context().Err() != nil
-		if !dead {
-			n.mu.Unlock()
-			_ = conn.CloseWithError(0, "duplicate")
-			n.log.Printf("duplicate %s, keeping existing session", peerLabel(pid, peerNames))
-			return existing, nil
-		}
+		old = existing
 		delete(n.sessions, pid)
-		n.log.Printf("replacing dead session %s", peerLabel(pid, peerNames))
 	}
 	n.sessions[pid] = sess
 	n.mu.Unlock()
+	if old != nil {
+		if old.conn != nil {
+			_ = old.conn.CloseWithError(0, "replaced")
+		}
+		n.log.Printf("replacing session %s", peerLabel(pid, peerNames))
+	}
 
 	n.table.Insert(kademlia.Contact{ID: pid, Addrs: adv})
 	role := "inbound"
