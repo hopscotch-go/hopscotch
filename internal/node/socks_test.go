@@ -3,7 +3,6 @@ package node
 import (
 	"io"
 	"net"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -19,8 +18,6 @@ func TestSocksOverlayConnect(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	writeTestHosts(t, filepath.Dir(foo.cfg.Identity), foo, bar, baz)
-	foo.loadHostsFile()
 	if !foo.waitRoute(baz.ID().ULA(), 3*time.Second) {
 		t.Fatal("no route")
 	}

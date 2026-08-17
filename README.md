@@ -47,7 +47,9 @@ See [docs/routing.md](docs/routing.md) for overlay packets and named ping hop-by
 
 ## Three-node hub
 
-`examples/hub/` is **foo → bar ← baz**. bar listens on `127.0.0.1:4434`; foo and baz dial bar (neither listens). QUIC sessions stay on those edges; routes propagate so foo can reach baz’s ULA via bar. `.vscode/launch.json` starts bar, baz, and foo. On a second machine, point baz’s `peers` at bar’s reachable address and run with `--tun` (gateway defaults true there).
+`examples/hub/` is **foo → bar ← baz**. bar listens on `127.0.0.1:4434`; foo and baz dial bar (neither listens). QUIC sessions stay on those edges; routes propagate so foo can reach baz’s ULA via bar. `.vscode/launch.json` starts bar, baz, and foo.
+
+For a **remote** baz (NAT-friendly), use `./deploy-baz.sh`: baz listens on the cloud host; local bar dials it (`foo → bar → baz`). Baz runs with `--tun` and optional SOCKS.
 
 ```bash
 ./hopscotch ca bootstrap --dir examples/.local --node foo --node bar --node baz
@@ -125,20 +127,27 @@ Each NodeID maps to a ULA (`fd00::/8`). `--tun` (or `tun: true` in YAML) creates
 
 ```bash
 ./hopscotch --config examples/hub/foo.yaml --socks 127.0.0.1:1080
-curl --socks5-hostname 127.0.0.1:1080 http://baz.hopscotch/
+curl --socks5-hostname 127.0.0.1:1080 http://bar.hopscotch/
 ```
 
-Targets may be a mesh ULA, `name`, or `name.hopscotch` (resolved from the local hosts file and live sessions).
+Targets may be a mesh ULA, or a name / `name.hopscotch` (resolved from self, live sessions, or a named-echo probe).
+
+`hopscotch ula` prints a ULA for scripts. With no name it uses the identity key offline; with a name it asks a running node over its control socket (same as `ping`), probing the mesh if needed:
+
+```bash
+python3 -m http.server 8080 --bind "$(./hopscotch ula --config examples/hub/foo.yaml)"
+./hopscotch ula --config examples/hub/foo.yaml baz
+```
 
 TUN and userspace can run together: the host uses the TUN; in-process dials and SOCKS use the stack.
 
-One hopscotch per machine is the host overlay NIC (`gateway` defaults true): it installs an unscoped `fd00::/8` route and overlay DNS so ordinary programs resolve `name.hopscotch` and send through the TUN.
+One hopscotch per machine is the host overlay NIC (`gateway` defaults true): it installs an unscoped `fd00::/8` route and overlay DNS so ordinary programs resolve known `name.hopscotch` names and send through the TUN.
 
 ```bash
-ping6 baz.hopscotch
+ping6 bar.hopscotch
 ```
 
-Names are answered in-process (not forwarded): AAAA, and NODATA for A. On macOS the stub is `127.0.0.1` on an ephemeral UDP port plus `/etc/resolver/hopscotch` (the `port` is written into the file). That file is only for the `hopscotch` zone; it does not install a global search domain, so other VPN short names (Tailscale MagicDNS) keep working. On Linux it is `fd00::53` via systemd-resolved on the TUN, with search domain `hopscotch`. `ca bootstrap` writes `examples/.local/hosts` as a seed of name → ULA. `--tun` needs root:
+Names are answered in-process (not forwarded): AAAA, and NODATA for A. Resolution covers this node and currently connected peers (cert SANs). On macOS the stub is `127.0.0.1` on an ephemeral UDP port plus `/etc/resolver/hopscotch` (the `port` is written into the file). That file is only for the `hopscotch` zone; it does not install a global search domain, so other VPN short names (Tailscale MagicDNS) keep working. On Linux it is `fd00::53` via systemd-resolved on the TUN, with search domain `hopscotch`. `--tun` needs root:
 
 ```bash
 sudo ./hopscotch --config examples/hub/foo.yaml --tun
@@ -150,4 +159,4 @@ foo is the host overlay NIC (`--tun`, gateway default true). Extra hopscotch pro
 
 `hopscotch ping` is the named control-plane echo and does not use the TUN.
 
-Generated keys, certs, sockets, and the hosts file live in `examples/.local/` (gitignored).
+Generated keys, certs, and sockets live in `examples/.local/` (gitignored).

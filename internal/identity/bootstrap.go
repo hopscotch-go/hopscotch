@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -57,21 +56,7 @@ func bootstrapDirLocked(dir string, names []string) error {
 			return err
 		}
 	}
-	return writeHosts(dir, names)
-}
-
-// writeHosts writes an overlay hosts file mapping each node's ULA to its name.
-func writeHosts(dir string, names []string) error {
-	var b strings.Builder
-	b.WriteString("# hopscotch overlay names → ULA\n")
-	for _, name := range names {
-		id, err := IDFromKeyFile(filepath.Join(dir, name+".pem"))
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(&b, "%s %s\n", id.ULA(), name)
-	}
-	return os.WriteFile(filepath.Join(dir, "hosts"), []byte(b.String()), 0o644)
+	return nil
 }
 
 // withMkdirLock runs fn while holding an exclusive mkdir-based lock at lockDir.

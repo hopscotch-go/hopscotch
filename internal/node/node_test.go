@@ -61,6 +61,44 @@ func TestRequiresCA(t *testing.T) {
 	}
 }
 
+func TestControlSocketBusy(t *testing.T) {
+	dir := t.TempDir()
+	caPath, caCert, caKey := writeCA(t, dir)
+	sock := filepath.Join(dir, "shared.sock")
+	a := startNode(t, dir, "a", caPath, caCert, caKey, Config{
+		Listen:  "127.0.0.1:0",
+		Network: "udp",
+		Control: sock,
+	})
+	defer a.Close()
+
+	id, cert := signNode(t, dir, "b", caCert, caKey)
+	b, err := New(Config{
+		Listen:   "127.0.0.1:0",
+		Network:  "udp",
+		Identity: id,
+		CA:       caPath,
+		Cert:     cert,
+		Control:  sock,
+		Log:      log.New(io.Discard, "", 0),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if err := b.Start(); err == nil {
+		t.Fatal("expected start to fail while control socket is live")
+	}
+	if _, err := os.Stat(sock); err != nil {
+		t.Fatalf("live control socket was removed: %v", err)
+	}
+	// Failed Start must not wipe the winner's sock on Close.
+	b.Close()
+	if _, err := os.Stat(sock); err != nil {
+		t.Fatalf("Close removed live control socket: %v", err)
+	}
+}
+
 func TestOurCertMustMatchCA(t *testing.T) {
 	dir := t.TempDir()
 	caPath, _, _ := writeCA(t, dir)
@@ -177,6 +215,16 @@ func TestHubStarEcho(t *testing.T) {
 	}
 	if got.Name != "baz" {
 		t.Fatalf("name %s", got.Name)
+	}
+	if got.ULA != baz.ID().ULA().String() {
+		t.Fatalf("ula %s want %s", got.ULA, baz.ID().ULA())
+	}
+	ip, err := foo.ResolveULA(ctx, "baz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ip.Equal(baz.ID().ULA()) {
+		t.Fatalf("resolve %s", ip)
 	}
 }
 

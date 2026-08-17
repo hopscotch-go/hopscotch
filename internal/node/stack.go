@@ -12,7 +12,6 @@ import (
 // startUserspace attaches a gVisor IPv6 stack that dials/listens on this
 // node's ULA and injects outbound packets into the overlay forward path.
 func (n *Node) startUserspace() error {
-	n.loadHostsFile()
 	n.mu.Lock()
 	if n.stack != nil {
 		n.mu.Unlock()

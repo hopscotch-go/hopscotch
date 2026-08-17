@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -35,23 +34,6 @@ const (
 	tcpMSS             = tun.MTU - ipv6HeaderLen - tcpHeaderMin // 1220
 )
 
-// loadHostsFile loads local name→ULA mappings from the identity-adjacent hosts file.
-func (n *Node) loadHostsFile() {
-	if n.cfg.Identity == "" {
-		return
-	}
-	hostsPath := filepath.Join(filepath.Dir(n.cfg.Identity), "hosts")
-	hs, err := tun.ParseHostsFile(hostsPath)
-	if err != nil {
-		return
-	}
-	n.mu.Lock()
-	for _, h := range hs {
-		n.hosts[h.Name] = h.IP
-	}
-	n.mu.Unlock()
-}
-
 // startTun opens a gateway TUN and optional local DNS for host overlay traffic.
 func (n *Node) startTun() error {
 	if !n.cfg.Gateway {
@@ -60,7 +42,6 @@ func (n *Node) startTun() error {
 		n.log.Printf("gateway=false: %s is not a host address; ICMP echo answered here", n.id.ULA())
 		return nil
 	}
-	n.loadHostsFile()
 	var dnsPort int
 	if runtime.GOOS == "darwin" {
 		port, err := n.listenLocalDNS()
@@ -168,14 +149,15 @@ func (n *Node) handleIPv6(from *session, pkt []byte) {
 		d := n.tun
 		st := n.stack
 		n.mu.Unlock()
+		// Prefer the userspace stack when present. Also writing to a kernel
+		// TUN makes the host TCP stack RST connections dialed by gVisor
+		// (SOCKS on a --tun gateway), which shows up as curl empty replies.
 		if st != nil {
 			st.Inject(pkt)
+			return
 		}
 		if d != nil {
 			_ = d.WritePacket(pkt)
-			return
-		}
-		if st != nil {
 			return
 		}
 		if reply, ok := icmpEchoReply(pkt); ok {
@@ -255,7 +237,7 @@ func (n *Node) overlayLookup(name string) dns.Record {
 	return dns.Record{AAAA: n.overlayIP(name)}
 }
 
-// overlayIP maps an overlay name to a mesh ULA from self, sessions, or hosts.
+// overlayIP maps an overlay name to a mesh ULA from self or live peer sessions.
 func (n *Node) overlayIP(name string) net.IP {
 	name = strings.ToLower(name)
 	if name == "dns" {
@@ -274,9 +256,6 @@ func (n *Node) overlayIP(name string) net.IP {
 				return s.id.ULA()
 			}
 		}
-	}
-	if ip, ok := n.hosts[name]; ok {
-		return append(net.IP(nil), ip...)
 	}
 	return nil
 }

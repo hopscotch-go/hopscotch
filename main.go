@@ -41,9 +41,11 @@ Every node needs a CA-signed certificate. Self-signed peers are rejected.
   hopscotch --config examples/hub/foo.yaml
   hopscotch ping --config examples/hub/foo.yaml baz
   hopscotch traceroute --config examples/hub/foo.yaml baz
+  hopscotch ula --config examples/hub/foo.yaml
+  hopscotch ula --config examples/hub/foo.yaml baz
 
 With --tun (needs root), one node is the host overlay NIC (fd00::/8
-and overlay DNS). Then ping6 baz is a normal hostname lookup.
+and overlay DNS). Then ping6 of a connected peer name works.
 
   sudo ./hopscotch --config examples/hub/foo.yaml --tun
 
@@ -99,6 +101,13 @@ func main() {
 		return
 	}
 
+	if len(os.Args) >= 2 && os.Args[1] == "ula" {
+		if err := runULA(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
 	configPath := flag.String("config", "", "node YAML config (paths relative to the file)")
 	var listens stringList
 	flag.Var(&listens, "listen", "bind address, repeatable (`udp:host:port` or `tcp:host:port`)")
@@ -109,6 +118,7 @@ func main() {
 	tunFlag := flag.Bool("tun", false, "bring up a TUN for overlay IPv6")
 	userspaceFlag := flag.Bool("userspace", false, "gVisor userspace IPv6 stack (DialTCP/ListenTCP; no root)")
 	socksFlag := flag.String("socks", "", "local SOCKS5 listen address (implies userspace), e.g. 127.0.0.1:1080")
+	httpFlag := flag.Int("http", 0, "serve a tiny HTTP banner on this overlay TCP port (implies userspace)")
 	gwFlag := flag.Bool("gateway", true, "this TUN is the host overlay NIC (fd00::/8 and overlay DNS); -gateway=false for extra nodes on the same machine")
 	flag.Usage = usage
 	flag.Parse()
@@ -129,6 +139,9 @@ func main() {
 	}
 	if *socksFlag != "" {
 		ncfg.Socks = *socksFlag
+	}
+	if *httpFlag > 0 {
+		ncfg.HTTPPort = *httpFlag
 	}
 	gatewayOnCmdline := false
 	flag.Visit(func(f *flag.Flag) {
@@ -384,4 +397,76 @@ func runCA(args []string) error {
 	default:
 		return fmt.Errorf("unknown ca command %q (want init, sign, or bootstrap)", args[0])
 	}
+}
+
+// runULA prints a mesh ULA: this node's identity, or a name via control socket.
+func runULA(args []string) error {
+	fs := flag.NewFlagSet("ula", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	configPath := fs.String("config", "", "node YAML (identity; with a name, uses control socket)")
+	idFile := fs.String("identity", "", "node private key PEM")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() > 1 {
+		return fmt.Errorf("usage: hopscotch ula --config node.yaml [name]\n       hopscotch ula --identity node.pem")
+	}
+
+	if fs.NArg() == 1 {
+		target := fs.Arg(0)
+		if *configPath == "" {
+			return fmt.Errorf("usage: hopscotch ula --config node.yaml %s", target)
+		}
+		f, err := config.Load(*configPath)
+		if err != nil {
+			return err
+		}
+		if f.Control == "" {
+			return fmt.Errorf("%s: no control socket (set control:)", *configPath)
+		}
+		conn, err := net.DialTimeout("unix", f.Control, 2*time.Second)
+		if err != nil {
+			return fmt.Errorf("connect to %s: %w (is that node running?)", f.Control, err)
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(12 * time.Second))
+		if err := proto.Write(conn, proto.Message{Type: "ula", Name: target}); err != nil {
+			return err
+		}
+		msg, err := proto.Read(conn)
+		if err != nil {
+			return err
+		}
+		if msg.Type == "error" || msg.Error != "" {
+			if msg.Error == "" {
+				msg.Error = "ula lookup failed"
+			}
+			return fmt.Errorf("%s", msg.Error)
+		}
+		if msg.ULA == "" {
+			return fmt.Errorf("empty ULA for %q", target)
+		}
+		fmt.Println(msg.ULA)
+		return nil
+	}
+
+	identityPath := *idFile
+	if *configPath != "" {
+		f, err := config.Load(*configPath)
+		if err != nil {
+			return err
+		}
+		if identityPath == "" {
+			identityPath = f.Identity
+		}
+	}
+	if identityPath == "" {
+		return fmt.Errorf("usage: hopscotch ula --config node.yaml [name]\n       hopscotch ula --identity node.pem")
+	}
+	id, err := identity.IDFromKeyFile(identityPath)
+	if err != nil {
+		return err
+	}
+	fmt.Println(id.ULA().String())
+	return nil
 }

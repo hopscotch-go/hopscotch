@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/hopscotch-go/hopscotch/internal/identity"
@@ -30,14 +31,11 @@ type TraceResult struct {
 // TraceRoute sends ICMPv6 echoes with increasing Hop Limit and records
 // which node answers Time Exceeded or Echo Reply. This follows the
 // distance-vector RIB — the same path as ping6 — not named-echo flood.
-func (n *Node) TraceRoute(ctx context.Context, rawName string, maxTTL int) (TraceResult, error) {
-	name, err := identity.ParseName(rawName)
+// dest may be a mesh ULA or an overlay name known from self/sessions.
+func (n *Node) TraceRoute(ctx context.Context, dest string, maxTTL int) (TraceResult, error) {
+	dstIP, err := n.ResolveULA(ctx, dest)
 	if err != nil {
 		return TraceResult{}, err
-	}
-	dstIP := n.overlayIP(name)
-	if dstIP == nil {
-		return TraceResult{}, fmt.Errorf("unknown name %q (no session/hosts ULA)", name)
 	}
 	if maxTTL <= 0 {
 		maxTTL = 32
@@ -68,7 +66,7 @@ func (n *Node) TraceRoute(ctx context.Context, rawName string, maxTTL int) (Trac
 		}()
 	}
 
-	out := TraceResult{Dst: name, Hops: make([]TraceHop, 0, maxTTL)}
+	out := TraceResult{Dst: dest, Hops: make([]TraceHop, 0, maxTTL)}
 	src := n.id.ULA()
 	for ttl := 1; ttl <= maxTTL; ttl++ {
 		if err := ctx.Err(); err != nil {
@@ -154,7 +152,65 @@ func (n *Node) tapPacket(pkt []byte) {
 	}
 }
 
-// nameForULA resolves a mesh ULA to a peer name or hosts entry.
+// ResolveULA maps a mesh ULA literal or overlay name to a ULA.
+// Names unknown from self/sessions are resolved with a named-echo flood.
+func (n *Node) ResolveULA(ctx context.Context, dest string) (net.IP, error) {
+	if ip := net.ParseIP(dest); ip != nil {
+		if !identity.IsMeshULA(ip) {
+			return nil, fmt.Errorf("not a mesh ULA: %s", dest)
+		}
+		return ip.To16(), nil
+	}
+	name := strings.ToLower(dest)
+	if cut, ok := strings.CutSuffix(name, "."+identity.NameURIScheme); ok {
+		name = cut
+	}
+	name = strings.TrimSuffix(name, ".")
+	parsed, err := identity.ParseName(name)
+	if err != nil {
+		return nil, err
+	}
+	if ip := n.overlayIP(parsed); ip != nil {
+		return ip, nil
+	}
+	got, err := n.Echo(ctx, parsed)
+	if err != nil {
+		return nil, err
+	}
+	ip := net.ParseIP(got.ULA)
+	if ip == nil || !identity.IsMeshULA(ip) {
+		return nil, fmt.Errorf("resolve %q: no ULA in echo reply", parsed)
+	}
+	return ip.To16(), nil
+}
+
+// resolveOverlayDest maps a mesh ULA literal or overlay name using local
+// knowledge only (self + live sessions). Prefer ResolveULA when a mesh
+// probe is acceptable.
+func (n *Node) resolveOverlayDest(dest string) (net.IP, error) {
+	if ip := net.ParseIP(dest); ip != nil {
+		if !identity.IsMeshULA(ip) {
+			return nil, fmt.Errorf("not a mesh ULA: %s", dest)
+		}
+		return ip.To16(), nil
+	}
+	name := strings.ToLower(dest)
+	if cut, ok := strings.CutSuffix(name, "."+identity.NameURIScheme); ok {
+		name = cut
+	}
+	name = strings.TrimSuffix(name, ".")
+	parsed, err := identity.ParseName(name)
+	if err != nil {
+		return nil, err
+	}
+	ip := n.overlayIP(parsed)
+	if ip == nil {
+		return nil, fmt.Errorf("unknown name %q (no self/session ULA)", parsed)
+	}
+	return ip, nil
+}
+
+// nameForULA resolves a mesh ULA to a self or live peer name.
 func (n *Node) nameForULA(ula net.IP) string {
 	if ula.Equal(n.id.ULA()) {
 		return n.hopName()
@@ -165,13 +221,6 @@ func (n *Node) nameForULA(ula net.IP) string {
 				return s.names[0]
 			}
 			return s.id.Short()
-		}
-	}
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	for name, ip := range n.hosts {
-		if ip.Equal(ula) {
-			return name
 		}
 	}
 	return ""

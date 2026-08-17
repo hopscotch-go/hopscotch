@@ -20,6 +20,7 @@ type Message struct {
 	Hops    int        `json:"hops,omitempty"`
 	RTTMs   float64    `json:"rtt_ms,omitempty"`
 	Error   string     `json:"error,omitempty"`
+	ULA     string     `json:"ula,omitempty"`
 	MaxTTL  int        `json:"max_ttl,omitempty"`
 	Trace   []TraceHop `json:"trace,omitempty"`
 	Reached bool       `json:"reached,omitempty"`

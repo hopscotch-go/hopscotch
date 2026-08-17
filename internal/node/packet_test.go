@@ -393,12 +393,11 @@ func TestOverlayDNS(t *testing.T) {
 	defer bar.Close()
 	defer baz.Close()
 
-	foo.hosts["baz"] = baz.ID().ULA()
 	fooDev := tun.NewMem()
 	defer fooDev.Close()
 	foo.AttachTun(fooDev)
 
-	q := dnsQueryPkt(t, foo.ID().ULA(), identity.ResolverULA(), "baz.hopscotch.", dnsmessage.TypeAAAA)
+	q := dnsQueryPkt(t, foo.ID().ULA(), identity.ResolverULA(), "bar.hopscotch.", dnsmessage.TypeAAAA)
 	if err := fooDev.Inject(q); err != nil {
 		t.Fatal(err)
 	}
@@ -428,7 +427,7 @@ func TestOverlayDNS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if h.Type != dnsmessage.TypeAAAA || !net.IP(rr.AAAA[:]).Equal(baz.ID().ULA()) {
+	if h.Type != dnsmessage.TypeAAAA || !net.IP(rr.AAAA[:]).Equal(bar.ID().ULA()) {
 		t.Fatalf("aaaa %s", net.IP(rr.AAAA[:]))
 	}
 }

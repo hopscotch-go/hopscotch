@@ -1,8 +1,6 @@
 package tun
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -15,27 +13,6 @@ func TestStripHostsBlock(t *testing.T) {
 	}
 	if strings.Contains(got, "old") || strings.Contains(got, "hopscotch BEGIN") {
 		t.Fatal("old block left")
-	}
-}
-
-func TestParseHostsFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "hosts")
-	if err := os.WriteFile(path, []byte("# hopscotch overlay names → ULA\nfd00::aa foo\n100.64.1.2 foo\nfe80::1 skip\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	hs, err := ParseHostsFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(hs) != 1 || hs[0].Name != "foo" || hs[0].IP == nil {
-		t.Fatalf("%v", hs)
-	}
-}
-
-func TestParseHostsFileMissing(t *testing.T) {
-	if _, err := ParseHostsFile(filepath.Join(t.TempDir(), "nope")); !os.IsNotExist(err) {
-		t.Fatalf("err %v", err)
 	}
 }
 

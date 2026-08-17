@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -11,11 +12,15 @@ import (
 )
 
 // listenControl opens the unix control socket for local ping/traceroute.
+// If another hopscotch is already serving this path, Start fails instead of
+// stealing the socket (and the mesh session that goes with the same identity).
 func (n *Node) listenControl() error {
 	if err := os.MkdirAll(filepath.Dir(n.controlPath), 0o700); err != nil {
 		return err
 	}
-	_ = os.Remove(n.controlPath)
+	if err := ensureControlSocketFree(n.controlPath); err != nil {
+		return err
+	}
 	ln, err := net.Listen("unix", n.controlPath)
 	if err != nil {
 		return err
@@ -27,6 +32,25 @@ func (n *Node) listenControl() error {
 	}
 	n.control = ln
 	go n.controlLoop()
+	return nil
+}
+
+// ensureControlSocketFree errors if path is a live control socket; removes a stale sock file.
+func ensureControlSocketFree(path string) error {
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	conn, err := net.DialTimeout("unix", path, time.Second)
+	if err == nil {
+		_ = conn.Close()
+		return fmt.Errorf("control socket %s already in use (node already running?)", path)
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
 	return nil
 }
 
@@ -92,6 +116,19 @@ func (n *Node) handleControl(conn net.Conn) {
 					Reply:   h.Reply,
 				}
 			}
+		}
+		_ = proto.Write(conn, reply)
+	case "ula":
+		_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
+		ctx, cancel := context.WithTimeout(n.ctx, 10*time.Second)
+		defer cancel()
+		ip, err := n.ResolveULA(ctx, msg.Name)
+		reply := proto.Message{Type: "ula_ok", RPC: msg.RPC, Name: msg.Name}
+		if err != nil {
+			reply.Type = "error"
+			reply.Error = err.Error()
+		} else {
+			reply.ULA = ip.String()
 		}
 		_ = proto.Write(conn, reply)
 	default:

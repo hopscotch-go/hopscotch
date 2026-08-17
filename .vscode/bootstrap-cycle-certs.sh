@@ -8,7 +8,6 @@ nodes="foo bar baz buzz bizz mid1 mid2 mid3 blaz"
 
 certs_ok() {
 	[ -f "$dir/ca.crt" ] || return 1
-	[ -f "$dir/hosts" ] || return 1
 	for n in $nodes; do
 		[ -f "$dir/$n.crt" ] || return 1
 	done

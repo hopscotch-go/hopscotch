@@ -225,11 +225,6 @@ func (n *Node) ulaLabel(ula string) string {
 				return routePeerName(s.id, s.names)
 			}
 		}
-		for name, hip := range n.hosts {
-			if hip.Equal(ip) {
-				return name
-			}
-		}
 	}
 	if len(ula) > 12 {
 		return ula[len(ula)-12:]

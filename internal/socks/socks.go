@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"time"
 )
 
@@ -19,6 +20,7 @@ const (
 	repSuccess = 0x00
 	repGeneral = 0x01
 	repHost    = 0x04
+	repRefused = 0x05
 )
 
 // DialFunc opens a TCP connection to host (name or IP) and port.
@@ -60,7 +62,11 @@ func (s *Server) handle(c net.Conn) {
 	remote, err := s.Dial(ctx, host, port)
 	if err != nil {
 		s.logf("socks dial %s:%d: %v", host, port, err)
-		_ = writeReply(c, repHost, nil, 0)
+		rep := byte(repHost)
+		if strings.Contains(err.Error(), "refused") {
+			rep = repRefused
+		}
+		_ = writeReply(c, rep, nil, 0)
 		return
 	}
 	defer remote.Close()

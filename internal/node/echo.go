@@ -22,6 +22,7 @@ type echoWait struct {
 
 type EchoResult struct {
 	Name string
+	ULA  string
 	Path []string
 	Hops int
 	RTT  time.Duration
@@ -89,7 +90,7 @@ func (n *Node) Echo(ctx context.Context, rawName string) (EchoResult, error) {
 		return EchoResult{}, err
 	}
 	if n.hasName(name) {
-		return EchoResult{Name: name, Path: []string{n.hopName()}, Hops: 0}, nil
+		return EchoResult{Name: name, ULA: n.id.ULA().String(), Path: []string{n.hopName()}, Hops: 0}, nil
 	}
 
 	start := time.Now()
@@ -117,7 +118,7 @@ func (n *Node) Echo(ctx context.Context, rawName string) (EchoResult, error) {
 			}
 			return EchoResult{}, fmt.Errorf("ping %s: %s", name, errMsg)
 		}
-		return EchoResult{Name: name, Path: append([]string(nil), reply.Path...), Hops: len(reply.Path), RTT: time.Since(start)}, nil
+		return EchoResult{Name: name, ULA: reply.ULA, Path: append([]string(nil), reply.Path...), Hops: len(reply.Path), RTT: time.Since(start)}, nil
 	}
 }
 
@@ -133,6 +134,7 @@ func (n *Node) handleEcho(from *session, msg proto.Message) {
 			RPC:    msg.RPC,
 			Origin: msg.Origin,
 			Name:   name,
+			ULA:    n.id.ULA().String(),
 			Path:   append(append([]string{}, msg.Path...), n.hopName()),
 		})
 		return

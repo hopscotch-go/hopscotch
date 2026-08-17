@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 dir=examples/.local
 
 certs_ok() {
-	[ -f "$dir/ca.crt" ] && [ -f "$dir/foo.crt" ] && [ -f "$dir/bar.crt" ] && [ -f "$dir/baz.crt" ] && [ -f "$dir/hosts" ]
+	[ -f "$dir/ca.crt" ] && [ -f "$dir/foo.crt" ] && [ -f "$dir/bar.crt" ] && [ -f "$dir/baz.crt" ]
 }
 
 if certs_ok; then

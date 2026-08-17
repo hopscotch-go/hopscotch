@@ -2,10 +2,7 @@ package node
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -18,15 +15,13 @@ func TestTraceRouteHub(t *testing.T) {
 	defer bar.Close()
 	defer baz.Close()
 
-	writeTestHosts(t, filepath.Dir(foo.cfg.Identity), foo, bar, baz)
-	foo.loadHostsFile()
 	if !foo.waitRoute(baz.ID().ULA(), 3*time.Second) {
 		t.Fatal("no route to baz")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	tr, err := foo.TraceRoute(ctx, "baz", 8)
+	tr, err := foo.TraceRoute(ctx, baz.ID().ULA().String(), 8)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,12 +83,9 @@ func TestOverlayReachesBlaz(t *testing.T) {
 		t.Fatalf("foo should stay degree-1; peers=%d", foo.PeerCount())
 	}
 
-	writeTestHosts(t, dir, foo, bar, baz, buzz, bizz, blaz)
-	foo.loadHostsFile()
-
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	tr, err := foo.TraceRoute(ctx, "blaz", 16)
+	tr, err := foo.TraceRoute(ctx, blaz.ID().ULA().String(), 16)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,18 +120,5 @@ func TestNextHopUsesRouteTable(t *testing.T) {
 	}
 	if m := foo.RouteMetric(baz.ID().ULA()); m != 2 {
 		t.Fatalf("foo metric to baz %d want 2", m)
-	}
-}
-
-func writeTestHosts(t *testing.T, dir string, nodes ...*Node) {
-	t.Helper()
-	var b strings.Builder
-	b.WriteString("# hopscotch overlay names → ULA\n")
-	for _, n := range nodes {
-		name := n.hopName()
-		fmt.Fprintf(&b, "%s %s\n", n.ID().ULA(), name)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "hosts"), []byte(b.String()), 0o644); err != nil {
-		t.Fatal(err)
 	}
 }

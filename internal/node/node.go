@@ -40,6 +40,7 @@ type Config struct {
 	Tun        bool   // kernel TUN
 	Userspace  bool   // gVisor userspace IPv6 stack (no root); enables DialTCP
 	Socks      string // local SOCKS5 listen addr (implies Userspace), e.g. 127.0.0.1:1080
+	HTTPPort   int    // if >0, serve a tiny HTTP banner on this overlay TCP port (implies Userspace)
 	Gateway    bool   // this TUN owns fd00::/8 and overlay DNS for the host
 	NoListen   bool   // if true, do not bind (pure dial-only; cannot be dialed back)
 	LogOverlay bool   // log every overlay nextHop forward
@@ -88,7 +89,6 @@ type Node struct {
 	stack     *netstack.Stack
 	socksLn   net.Listener
 	dnsPC     net.PacketConn
-	hosts     map[string]net.IP
 
 	mu       sync.Mutex
 	sessions map[identity.NodeID]*session
@@ -222,7 +222,6 @@ func New(cfg Config) (*Node, error) {
 		sessions:    make(map[identity.NodeID]*session),
 		dialing:     make(map[string]bool),
 		echoWait:    make(map[string]echoWait),
-		hosts:       make(map[string]net.IP),
 		routes:      make(map[string]ribEntry),
 		quicConf: &quic.Config{
 			KeepAlivePeriod:       5 * time.Second,
@@ -362,7 +361,6 @@ func (n *Node) Start() error {
 	}
 	n.log.Printf("peers     %d", len(n.peerAddrs()))
 	n.log.Printf("auth      ca (any cert signed by the mesh CA)")
-	n.loadHostsFile()
 	if n.controlPath != "" {
 		if err := n.listenControl(); err != nil {
 			n.Close()
@@ -382,7 +380,7 @@ func (n *Node) Start() error {
 			return err
 		}
 	}
-	if n.cfg.Userspace || n.cfg.Socks != "" {
+	if n.cfg.Userspace || n.cfg.Socks != "" || n.cfg.HTTPPort > 0 {
 		if err := n.startUserspace(); err != nil {
 			n.Close()
 			return err
@@ -390,6 +388,12 @@ func (n *Node) Start() error {
 	}
 	if n.cfg.Socks != "" {
 		if err := n.startSocks(); err != nil {
+			n.Close()
+			return err
+		}
+	}
+	if n.cfg.HTTPPort > 0 {
+		if err := n.startHTTP(); err != nil {
 			n.Close()
 			return err
 		}
@@ -440,9 +444,10 @@ func (n *Node) Close() {
 	}
 	if n.control != nil {
 		_ = n.control.Close()
-	}
-	if n.controlPath != "" {
-		_ = os.Remove(n.controlPath)
+		n.control = nil
+		if n.controlPath != "" {
+			_ = os.Remove(n.controlPath)
+		}
 	}
 	if n.ln != nil {
 		_ = n.ln.Close()

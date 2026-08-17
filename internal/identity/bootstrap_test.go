@@ -4,7 +4,6 @@ import (
 	"crypto/x509"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -42,13 +41,6 @@ func TestBootstrapDir(t *testing.T) {
 	}
 	if string(fooPEM) != string(again) {
 		t.Fatal("existing cert was rewritten")
-	}
-	hosts, err := os.ReadFile(filepath.Join(dir, "hosts"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(hosts), " foo\n") || !strings.Contains(string(hosts), " bar\n") {
-		t.Fatalf("hosts %s", hosts)
 	}
 }
 
