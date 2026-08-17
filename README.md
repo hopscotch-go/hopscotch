@@ -119,7 +119,18 @@ Each NodeID maps to a ULA (`fd00::/8`). `--tun` (or `tun: true` in YAML) creates
 ./hopscotch --config examples/hub/foo.yaml --userspace
 ```
 
-TUN and userspace can run together: the host uses the TUN; in-process dials use the stack.
+### SOCKS5 proxy
+
+`--socks 127.0.0.1:1080` (or `socks:` in YAML) starts a local SOCKS5 CONNECT proxy that dials overlay names/ULAs through the userspace stack (enabled automatically). Example:
+
+```bash
+./hopscotch --config examples/hub/foo.yaml --socks 127.0.0.1:1080
+curl --socks5-hostname 127.0.0.1:1080 http://baz.hopscotch/
+```
+
+Targets may be a mesh ULA, `name`, or `name.hopscotch` (resolved from the local hosts file and live sessions).
+
+TUN and userspace can run together: the host uses the TUN; in-process dials and SOCKS use the stack.
 
 One hopscotch per machine is the host overlay NIC (`gateway` defaults true): it installs an unscoped `fd00::/8` route and overlay DNS so ordinary programs resolve `name.hopscotch` and send through the TUN.
 

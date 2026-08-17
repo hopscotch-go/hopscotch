@@ -39,6 +39,7 @@ type Config struct {
 	Control    string // unix socket for local commands (ping, traceroute)
 	Tun        bool   // kernel TUN
 	Userspace  bool   // gVisor userspace IPv6 stack (no root); enables DialTCP
+	Socks      string // local SOCKS5 listen addr (implies Userspace), e.g. 127.0.0.1:1080
 	Gateway    bool   // this TUN owns fd00::/8 and overlay DNS for the host
 	NoListen   bool   // if true, do not bind (pure dial-only; cannot be dialed back)
 	LogOverlay bool   // log every overlay nextHop forward
@@ -85,6 +86,7 @@ type Node struct {
 	mux       *backend.Mux
 	tun       tun.Device
 	stack     *netstack.Stack
+	socksLn   net.Listener
 	dnsPC     net.PacketConn
 	hosts     map[string]net.IP
 
@@ -380,8 +382,14 @@ func (n *Node) Start() error {
 			return err
 		}
 	}
-	if n.cfg.Userspace {
+	if n.cfg.Userspace || n.cfg.Socks != "" {
 		if err := n.startUserspace(); err != nil {
+			n.Close()
+			return err
+		}
+	}
+	if n.cfg.Socks != "" {
+		if err := n.startSocks(); err != nil {
 			n.Close()
 			return err
 		}
@@ -410,11 +418,16 @@ func (n *Node) Close() {
 	n.tun = nil
 	st := n.stack
 	n.stack = nil
+	socksLn := n.socksLn
+	n.socksLn = nil
 	n.mu.Unlock()
 	for _, s := range sessions {
 		if s.conn != nil {
 			_ = s.conn.CloseWithError(0, "bye")
 		}
+	}
+	if socksLn != nil {
+		_ = socksLn.Close()
 	}
 	if st != nil {
 		st.Close()

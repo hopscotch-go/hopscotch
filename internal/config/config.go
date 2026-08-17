@@ -23,6 +23,7 @@ type File struct {
 	Peers     []peers.Peer
 	Tun       bool
 	Userspace bool
+	Socks     string
 	Gateway   bool
 }
 
@@ -35,6 +36,7 @@ type rawFile struct {
 	Peers     []rawPeer  `yaml:"peers"`
 	Tun       bool       `yaml:"tun"`
 	Userspace bool       `yaml:"userspace"`
+	Socks     string     `yaml:"socks"`
 	Gateway   *bool      `yaml:"gateway"`
 }
 
@@ -110,6 +112,7 @@ func Load(path string) (*File, error) {
 		Listen:    append([]string(nil), raw.Listen...),
 		Tun:       raw.Tun,
 		Userspace: raw.Userspace,
+		Socks:     raw.Socks,
 		Gateway:   true,
 	}
 	if raw.Gateway != nil {

@@ -52,6 +52,11 @@ With --userspace, a gVisor IPv6 stack binds the node ULA in-process
 
   ./hopscotch --config examples/hub/foo.yaml --userspace
 
+With --socks 127.0.0.1:1080, apps can CONNECT through the mesh by
+overlay name (curl --socks5-hostname 127.0.0.1:1080 http://baz.hopscotch/).
+
+  ./hopscotch --config examples/hub/foo.yaml --socks 127.0.0.1:1080
+
   hopscotch ca init --key ca.key --cert ca.crt
   hopscotch ca sign --ca-key ca.key --ca-cert ca.crt --identity node.pem --out node.crt --name foo
   hopscotch --ca ca.crt --cert node.crt --identity node.pem --listen 127.0.0.1:4433
@@ -103,6 +108,7 @@ func main() {
 	certFile := flag.String("cert", "", "this node's CA-signed certificate PEM")
 	tunFlag := flag.Bool("tun", false, "bring up a TUN for overlay IPv6")
 	userspaceFlag := flag.Bool("userspace", false, "gVisor userspace IPv6 stack (DialTCP/ListenTCP; no root)")
+	socksFlag := flag.String("socks", "", "local SOCKS5 listen address (implies userspace), e.g. 127.0.0.1:1080")
 	gwFlag := flag.Bool("gateway", true, "this TUN is the host overlay NIC (fd00::/8 and overlay DNS); -gateway=false for extra nodes on the same machine")
 	flag.Usage = usage
 	flag.Parse()
@@ -120,6 +126,9 @@ func main() {
 	}
 	if *userspaceFlag {
 		ncfg.Userspace = true
+	}
+	if *socksFlag != "" {
+		ncfg.Socks = *socksFlag
 	}
 	gatewayOnCmdline := false
 	flag.Visit(func(f *flag.Flag) {
@@ -166,6 +175,7 @@ func nodeConfigFromFlags(configPath string, listens []string, peersFile, idFile,
 			Control:   f.Control,
 			Tun:       f.Tun,
 			Userspace: f.Userspace,
+			Socks:     f.Socks,
 			Gateway:   f.Gateway,
 			Log:       log.Default(),
 		}, nil
