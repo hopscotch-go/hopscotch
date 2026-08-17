@@ -46,6 +46,10 @@ name   = URI SAN hopscotch:foo    # from the CA-signed cert
 - **ULA** is for overlay packets and RIB destinations.
 - **name** is for humans and `hopscotch ping` / DNS (`foo.hopscotch`).
 
+### Exit nodes
+
+An `exit: true` node advertises DV destinations `::/0` and `0.0.0.0/0` and SNATs internet traffic. Clients set `exit_node: <name>` to use that exit. Host `/1`+`/1` defaults are installed **only after** the client has learned a DV default and can next-hop the exit ULA (so a half-up mesh does not blackhole Wi‑Fi). They are torn down if that path is lost. Non-loopback underlay peer IPs are pinned via the physical Wi‑Fi/Ethernet gateway (not utun) — including on dial by hub nodes sharing the host — so QUIC to remote exits is not captured by `/1` (`127.0.0.1` stays on lo0). Internet packets are **encapsulated** in an outer mesh IPv6 header (dst = exit ULA, next-header 4 or 41) so relays stay pure ULA forwarders. There are no mesh IPv4 identities — only plumbing CGNAT addresses on the TUN for kernel sourcing. If the process is killed without `Close`, remove leftovers with `sudo route delete -inet 0.0.0.0/1` (and `128.0.0.0/1`, `::/1`, `8000::/1`).
+
 See [public_key_routing_diagram.md](public_key_routing_diagram.md) for how this differs from SSH / Tailscale.
 
 ---

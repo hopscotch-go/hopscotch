@@ -19,3 +19,13 @@ func Configure(d Device, opts Opts) error {
 
 // InstallDNS is a no-op on platforms without TUN support.
 func InstallDNS(string, int) (func() error, error) { return nil, nil }
+
+func installDefaultRoutes(string, []PinRoute) (func() error, error) {
+	return nil, fmt.Errorf("tun: not supported on this OS")
+}
+
+func physicalGateway(bool) net.IP { return nil }
+
+func pinHost(net.IP) (func() error, error) {
+	return nil, fmt.Errorf("tun: not supported on this OS")
+}

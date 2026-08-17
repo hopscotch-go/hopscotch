@@ -71,24 +71,7 @@
       "args": ["--config", "examples/hub/foo.yaml", "--tun"]
     },
     {
-      "name": "Hub: bar → remote baz",
-      "type": "go",
-      "request": "launch",
-      "mode": "auto",
-      "program": "${workspaceFolder}",
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "preLaunchTask": "bootstrap certs",
-      "presentation": {
-        "hidden": true,
-        "group": "hub-remote",
-        "panel": "dedicated",
-        "order": 15
-      },
-      "args": ["--config", "examples/.local/bar.yaml"]
-    },
-    {
-      "name": "Hub: foo (remote path)",
+      "name": "Hub: foo → remote baz",
       "type": "go",
       "request": "launch",
       "mode": "exec",
@@ -98,12 +81,11 @@
       "console": "integratedTerminal",
       "preLaunchTask": "tun debug prep",
       "presentation": {
-        "hidden": true,
-        "group": "hub-remote",
+        "group": "demos",
         "panel": "dedicated",
-        "order": 16
+        "order": 3
       },
-      "args": ["--config", "examples/hub/foo.yaml", "--tun"]
+      "args": ["--config", "examples/.local/foo.yaml", "--tun"]
     },
 
     {
@@ -331,16 +313,6 @@
       "presentation": {
         "group": "demos",
         "order": 2
-      }
-    },
-    {
-      "name": "Hub: foo → bar → remote baz",
-      "configurations": ["Hub: bar → remote baz", "Hub: foo (remote path)"],
-      "preLaunchTask": "tun debug prep",
-      "stopAll": true,
-      "presentation": {
-        "group": "demos",
-        "order": 3
       }
     },
     {

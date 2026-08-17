@@ -45,6 +45,7 @@ type TraceHop struct {
 
 type Hello struct {
 	Listen []string `json:"listen"`
+	Exit   bool     `json:"exit,omitempty"`
 }
 
 // Write marshals m as length-prefixed JSON onto w.

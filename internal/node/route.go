@@ -16,11 +16,16 @@ import (
 const (
 	routeInfinity = 16
 	routeRefresh  = 15 * time.Second
+	// routeHolddown keeps a dest learned via a peer across one sparse
+	// advertisement (session churn). Real withdraws clear after this
+	// elapses without the dest reappearing in that peer's updates.
+	routeHolddown = 3 * time.Second
 )
 
 type ribEntry struct {
-	next   identity.NodeID
+	next  identity.NodeID
 	metric int
+	stale time.Time // non-zero: missing from peer ads since this time
 }
 
 // RouteInfo is a snapshot of one RIB entry for logging / introspection.
@@ -70,6 +75,7 @@ func (n *Node) onSessionDown(s *session) {
 		n.logRoutes("session down", peerLabel(id, s.names))
 		n.advertiseRoutes()
 	}
+	n.releaseUnderlayPin(s.underlayIP)
 }
 
 // handleRoutes applies a peer's distance-vector update to the RIB.
@@ -91,11 +97,16 @@ func (n *Node) handleRoutes(from *session, msg proto.Message) {
 	}
 	seen := map[string]bool{peerULA: true}
 	for _, r := range msg.Routes {
-		ip := net.ParseIP(r.Dest)
-		if ip == nil || !identity.IsMeshULA(ip) || identity.IsResolverULA(ip) {
-			continue
+		dest := r.Dest
+		if isDefaultRouteDest(dest) {
+			// ok
+		} else {
+			ip := net.ParseIP(r.Dest)
+			if ip == nil || !identity.IsMeshULA(ip) || identity.IsResolverULA(ip) {
+				continue
+			}
+			dest = ip.String()
 		}
-		dest := ip.String()
 		if dest == self {
 			continue
 		}
@@ -110,16 +121,43 @@ func (n *Node) handleRoutes(from *session, msg proto.Message) {
 		}
 		cur, ok := n.routes[dest]
 		if !ok || cur.next == from.id || metric < cur.metric {
-			if !ok || cur.next != from.id || cur.metric != metric {
+			if !ok || cur.next != from.id || cur.metric != metric || !cur.stale.IsZero() {
 				n.routes[dest] = ribEntry{next: from.id, metric: metric}
 				changed = true
 			}
 		}
 	}
-	// Implicit withdraw: destinations previously learned via from but absent
-	// from this update (except the peer's own ULA, always direct).
+	// Implicit withdraw with holddown: mark missing, delete only after
+	// routeHolddown without re-advertisement (avoids sparse-ad flaps).
+	now := time.Now()
 	for dest, e := range n.routes {
 		if e.next != from.id || seen[dest] {
+			continue
+		}
+		if e.stale.IsZero() {
+			e.stale = now
+			n.routes[dest] = e
+			continue
+		}
+		if now.Sub(e.stale) >= routeHolddown {
+			delete(n.routes, dest)
+			changed = true
+		}
+	}
+	n.routeMu.Unlock()
+	if changed {
+		n.logRoutes("from "+peerLabel(from.id, from.names), "")
+		n.advertiseRoutes()
+	}
+}
+
+// expireStaleRoutes deletes holddown-expired RIB entries and re-advertises.
+func (n *Node) expireStaleRoutes() {
+	now := time.Now()
+	changed := false
+	n.routeMu.Lock()
+	for dest, e := range n.routes {
+		if e.stale.IsZero() || now.Sub(e.stale) < routeHolddown {
 			continue
 		}
 		delete(n.routes, dest)
@@ -127,7 +165,7 @@ func (n *Node) handleRoutes(from *session, msg proto.Message) {
 	}
 	n.routeMu.Unlock()
 	if changed {
-		n.logRoutes("from "+peerLabel(from.id, from.names), "")
+		n.logRoutes("holddown expire", "")
 		n.advertiseRoutes()
 	}
 }
@@ -146,6 +184,12 @@ func (n *Node) sendRoutesTo(s *session) {
 	}
 	routes := make([]proto.Route, 0, 16)
 	routes = append(routes, proto.Route{Dest: n.id.ULA().String(), Metric: 0})
+	if n.cfg.Exit {
+		routes = append(routes,
+			proto.Route{Dest: defaultRouteV6, Metric: 0},
+			proto.Route{Dest: defaultRouteV4, Metric: 0},
+		)
+	}
 	n.routeMu.Lock()
 	for dest, e := range n.routes {
 		if e.next == s.id {
@@ -209,10 +253,16 @@ func (n *Node) logRoutes(reason, detail string) {
 	for _, r := range routes {
 		n.log.Printf("  %-8s via %-8s metric=%d", r.Dest, r.Next, r.Metric)
 	}
+	if n.cfg.ExitNode != "" {
+		n.syncExitHostDefaults()
+	}
 }
 
 // ulaLabel maps a ULA string to a human-readable name for logs.
 func (n *Node) ulaLabel(ula string) string {
+	if isDefaultRouteDest(ula) {
+		return ula
+	}
 	if ula == n.id.ULA().String() {
 		return n.hopName()
 	}

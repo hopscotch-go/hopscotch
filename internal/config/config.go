@@ -25,6 +25,8 @@ type File struct {
 	Userspace bool
 	Socks     string
 	Gateway   bool
+	Exit      bool
+	ExitNode  string
 }
 
 type rawFile struct {
@@ -38,6 +40,8 @@ type rawFile struct {
 	Userspace bool       `yaml:"userspace"`
 	Socks     string     `yaml:"socks"`
 	Gateway   *bool      `yaml:"gateway"`
+	Exit      bool       `yaml:"exit"`
+	ExitNode  string     `yaml:"exit_node"`
 }
 
 type stringList []string
@@ -114,6 +118,8 @@ func Load(path string) (*File, error) {
 		Userspace: raw.Userspace,
 		Socks:     raw.Socks,
 		Gateway:   true,
+		Exit:      raw.Exit,
+		ExitNode:  raw.ExitNode,
 	}
 	if raw.Gateway != nil {
 		out.Gateway = *raw.Gateway

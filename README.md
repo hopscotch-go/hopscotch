@@ -49,7 +49,7 @@ See [docs/routing.md](docs/routing.md) for overlay packets and named ping hop-by
 
 `examples/hub/` is **foo → bar ← baz**. bar listens on `127.0.0.1:4434`; foo and baz dial bar (neither listens). QUIC sessions stay on those edges; routes propagate so foo can reach baz’s ULA via bar. `.vscode/launch.json` starts bar, baz, and foo.
 
-For a **remote** baz (NAT-friendly), use `./deploy-baz.sh`: baz listens on the cloud host; local bar dials it (`foo → bar → baz`). Baz runs with `--tun` and optional SOCKS.
+For a **remote** baz (NAT-friendly), use `./deploy-baz.sh`: baz listens on the cloud host as an exit; local foo dials it (`foo → baz`). Then launch **Hub: foo → remote baz**.
 
 ```bash
 ./hopscotch ca bootstrap --dir examples/.local --node foo --node bar --node baz
@@ -158,5 +158,36 @@ The TUN debugger config runs `dlv` via `sudo` (`asRoot`). To approve that with T
 foo is the host overlay NIC (`--tun`, gateway default true). Extra hopscotch processes on the same machine stay `gateway: false` so their ULAs are not local. They answer ICMP echo in-process. A second machine running baz with `--tun` owns `fd00::/8` there; `ping6 foo` and `ping6 bar` enter that TUN.
 
 `hopscotch ping` is the named control-plane echo and does not use the TUN.
+
+### Exit nodes (Tailscale-like)
+
+Mesh identity stays IPv6 ULA-only. An exit carries opaque IPv4/IPv6 internet packets encapsulated to the exit’s ULA (no mesh IPv4 addresses).
+
+On the exit (typically Linux):
+
+```yaml
+# examples/hub/baz.yaml
+exit: true
+tun: true
+```
+
+```bash
+sudo ./hopscotch --config examples/hub/baz.yaml --tun --exit
+```
+
+On a client gateway:
+
+```yaml
+exit_node: baz
+tun: true
+```
+
+```bash
+sudo ./hopscotch --config examples/hub/foo.yaml --tun --exit-node=baz
+# remote exit (after ./deploy-baz.sh):
+sudo ./hopscotch --config examples/.local/foo.yaml --tun
+```
+
+That waits for a mesh path to `baz` (DV `::/0` / `0.0.0.0/0` plus a next hop), then installs more-specific `/1` host defaults via the TUN and pins underlay peer IPs via your previous gateway. Internet packets are wrapped to `baz`’s ULA, unwrapped on the exit, and SNATed (nft MASQUERADE on Linux). Relays only forward normal mesh ULAs. If a killed process leaves routes behind: `sudo route delete -inet 0.0.0.0/1` (also `128.0.0.0/1`, `::/1`, `8000::/1`).
 
 Generated keys, certs, and sockets live in `examples/.local/` (gitignored).

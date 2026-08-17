@@ -3,11 +3,14 @@
 package tun
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
+	"strings"
 	"unsafe"
 
 	"golang.org/x/net/route"
@@ -59,7 +62,7 @@ func Open() (Device, error) {
 // Name returns the kernel-assigned utun interface name.
 func (d *device) Name() string { return d.name }
 
-// ReadPacket reads the next IPv6 packet from the utun device.
+// ReadPacket reads the next IPv4 or IPv6 packet from the utun device.
 func (d *device) ReadPacket() ([]byte, error) {
 	buf := make([]byte, 4+MTU)
 	for {
@@ -71,7 +74,7 @@ func (d *device) ReadPacket() ([]byte, error) {
 			return nil, fmt.Errorf("utun short read")
 		}
 		fam := binary.BigEndian.Uint32(buf[:4])
-		if fam != unix.AF_INET6 {
+		if fam != unix.AF_INET6 && fam != unix.AF_INET {
 			continue
 		}
 		pkt := make([]byte, n-4)
@@ -80,10 +83,17 @@ func (d *device) ReadPacket() ([]byte, error) {
 	}
 }
 
-// WritePacket writes an IPv6 packet to the utun device.
+// WritePacket writes an IPv4 or IPv6 packet to the utun device.
 func (d *device) WritePacket(pkt []byte) error {
+	if len(pkt) == 0 {
+		return nil
+	}
+	fam := uint32(unix.AF_INET6)
+	if pkt[0]>>4 == 4 {
+		fam = unix.AF_INET
+	}
 	buf := make([]byte, 4+len(pkt))
-	binary.BigEndian.PutUint32(buf[:4], unix.AF_INET6)
+	binary.BigEndian.PutUint32(buf[:4], fam)
 	copy(buf[4:], pkt)
 	_, err := d.f.Write(buf)
 	return err
@@ -123,12 +133,223 @@ func Configure(d Device, opts Opts) error {
 	if err := addInet6(name, ip, 128); err != nil {
 		return err
 	}
+	if pl := opts.PlumbingIP.To4(); pl != nil {
+		if err := addInet4Alias(name, pl); err != nil {
+			return fmt.Errorf("tun plumbing ipv4: %w", err)
+		}
+	}
 	if !opts.Gateway {
 		return nil
 	}
 	dst := make(net.IP, 16)
 	dst[0] = 0xfd
-	return addInet6Route(name, dst, 8)
+	if err := addInet6Route(name, dst, 8); err != nil {
+		return err
+	}
+	if opts.Exit {
+		if err := addInet4RouteCGNAT(name); err != nil {
+			return fmt.Errorf("tun exit cgnat: %w", err)
+		}
+	}
+	return nil
+}
+
+// installDefaultRoutes installs more-specific /1+/1 defaults via ifName so they
+// beat the Wi‑Fi default without relying on an interface-scoped 0.0.0.0/0
+// (which Darwin marks IFSCOPE and ignores for global traffic). Underlay peer
+// /32 and /128 routes are pinned via the previous default gateway first.
+func installDefaultRoutes(ifName string, pins []PinRoute) (func() error, error) {
+	if !safeIfName(ifName) {
+		return nil, fmt.Errorf("tun: bad interface name %q", ifName)
+	}
+	gw4 := physicalGateway(false)
+	gw6 := physicalGateway(true)
+	// Clear stale loopback host pins from earlier buggy installs.
+	_ = routeCmd("delete", "-inet", "-host", "127.0.0.1")
+	_ = routeCmd("delete", "-inet6", "-host", "::1")
+	var pinned []string // args after "route -n delete"
+	for _, p := range pins {
+		dst := p.Dst
+		if dst == nil || isLoopbackIP(dst) {
+			// 127/8 must stay on lo0. Pinning 127.0.0.1 via Wi‑Fi yields
+			// "can't assign requested address" for local UDP peers.
+			continue
+		}
+		if ip4 := dst.To4(); ip4 != nil {
+			gw := p.Gateway
+			if gw == nil || gw.To4() == nil {
+				gw = gw4
+			}
+			if gw == nil || gw.To4() == nil {
+				continue
+			}
+			if err := routeCmd("add", "-inet", "-host", ip4.String(), gw.To4().String()); err != nil {
+				_ = revertRoutePins(pinned)
+				return nil, fmt.Errorf("tun pin %s: %w", ip4, err)
+			}
+			pinned = append(pinned, "-inet", "-host", ip4.String())
+			continue
+		}
+		ip6 := dst.To16()
+		if ip6 == nil {
+			continue
+		}
+		gw := p.Gateway
+		if gw == nil || gw.To4() != nil || gw.To16() == nil {
+			gw = gw6
+		}
+		if gw == nil || gw.To16() == nil || gw.To4() != nil {
+			continue
+		}
+		if err := routeCmd("add", "-inet6", "-host", ip6.String(), gw.String()); err != nil {
+			_ = revertRoutePins(pinned)
+			return nil, fmt.Errorf("tun pin %s: %w", ip6, err)
+		}
+		pinned = append(pinned, "-inet6", "-host", ip6.String())
+	}
+	splits := [][]string{
+		// Darwin stores these as 0/1 and 128.0/1; use the same names on
+		// delete so Close/revert actually removes them.
+		{"-inet", "0/1", "-interface", ifName},
+		{"-inet", "128.0/1", "-interface", ifName},
+		{"-inet6", "::/1", "-interface", ifName},
+		{"-inet6", "8000::/1", "-interface", ifName},
+	}
+	var added [][]string
+	for _, args := range splits {
+		_ = routeCmd(append([]string{"delete"}, args[:2]...)...) // dest only; ignore missing
+		if err := routeCmd(append([]string{"add"}, args...)...); err != nil {
+			_ = revertSplitDefaults(added)
+			_ = revertRoutePins(pinned)
+			return nil, fmt.Errorf("tun default %s: %w", args[1], err)
+		}
+		added = append(added, args)
+	}
+	return func() error {
+		_ = revertSplitDefaults(added)
+		return revertRoutePins(pinned)
+	}, nil
+}
+
+func routeCmd(args ...string) error {
+	out, err := exec.Command("route", append([]string{"-n"}, args...)...).CombinedOutput()
+	if err != nil {
+		if bytes.Contains(out, []byte("File exists")) {
+			return nil
+		}
+		return fmt.Errorf("%w: %s", err, bytes.TrimSpace(out))
+	}
+	return nil
+}
+
+func revertSplitDefaults(added [][]string) error {
+	var first error
+	for i := len(added) - 1; i >= 0; i-- {
+		if err := routeCmd(append([]string{"delete"}, added[i]...)...); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+func revertRoutePins(pinned []string) error {
+	// pinned is flat: -inet -host ip | -inet6 -host ip
+	var first error
+	for i := 0; i+2 < len(pinned); i += 3 {
+		if err := routeCmd(append([]string{"delete"}, pinned[i:i+3]...)...); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+func currentDefaultGateway(inet6 bool) net.IP {
+	return physicalGateway(inet6)
+}
+
+// physicalGateway prefers a default route with an IP next hop (en0/Wi‑Fi),
+// not link#utun / IFSCOPE defaults from hopscotch or other VPNs.
+func physicalGateway(inet6 bool) net.IP {
+	fam := "inet"
+	if inet6 {
+		fam = "inet6"
+	}
+	out, err := exec.Command("netstat", "-rn", "-f", fam).CombinedOutput()
+	if err != nil {
+		return gatewayFromRouteGet(inet6)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != "default" {
+			continue
+		}
+		gw := net.ParseIP(fields[1])
+		if gw == nil {
+			continue // link#N — skip interface-scoped / VPN defaults
+		}
+		if inet6 && gw.To4() != nil {
+			continue
+		}
+		if !inet6 && gw.To4() == nil {
+			continue
+		}
+		return gw
+	}
+	return gatewayFromRouteGet(inet6)
+}
+
+func gatewayFromRouteGet(inet6 bool) net.IP {
+	args := []string{"-n", "get"}
+	if inet6 {
+		args = append(args, "-inet6")
+	}
+	args = append(args, "default")
+	out, err := exec.Command("route", args...).CombinedOutput()
+	if err != nil {
+		return nil
+	}
+	for _, line := range bytes.Split(out, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if !bytes.HasPrefix(line, []byte("gateway:")) {
+			continue
+		}
+		s := strings.TrimSpace(string(bytes.TrimPrefix(line, []byte("gateway:"))))
+		ip := net.ParseIP(s)
+		if ip == nil {
+			return nil
+		}
+		return ip
+	}
+	return nil
+}
+
+func pinHost(dst net.IP) (func() error, error) {
+	if ip4 := dst.To4(); ip4 != nil {
+		gw := physicalGateway(false)
+		if gw == nil || gw.To4() == nil {
+			return nil, fmt.Errorf("tun pin %s: no physical ipv4 gateway", ip4)
+		}
+		if err := routeCmd("add", "-inet", "-host", ip4.String(), gw.To4().String()); err != nil {
+			return nil, err
+		}
+		return func() error {
+			return routeCmd("delete", "-inet", "-host", ip4.String())
+		}, nil
+	}
+	ip6 := dst.To16()
+	if ip6 == nil {
+		return nil, fmt.Errorf("tun pin: bad address")
+	}
+	gw := physicalGateway(true)
+	if gw == nil || gw.To4() != nil {
+		return nil, fmt.Errorf("tun pin %s: no physical ipv6 gateway", ip6)
+	}
+	if err := routeCmd("add", "-inet6", "-host", ip6.String(), gw.String()); err != nil {
+		return nil, err
+	}
+	return func() error {
+		return routeCmd("delete", "-inet6", "-host", ip6.String())
+	}, nil
 }
 
 // sock6 builds a RawSockaddrInet6 for the given IPv6 address.
@@ -221,4 +442,27 @@ func setMTU(name string, mtu int) error {
 	ifr := unix.IfreqMTU{MTU: int32(mtu)}
 	copy(ifr.Name[:], name)
 	return unix.IoctlSetIfreqMTU(fd, &ifr)
+}
+
+func addInet4Alias(name string, ip net.IP) error {
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return fmt.Errorf("not ipv4")
+	}
+	out, err := exec.Command("ifconfig", name, "inet", ip4.String(), ip4.String(), "alias").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, out)
+	}
+	return nil
+}
+
+func addInet4RouteCGNAT(name string) error {
+	out, err := exec.Command("route", "-n", "add", "-inet", "100.64.0.0/10", "-interface", name).CombinedOutput()
+	if err != nil {
+		if bytes.Contains(out, []byte("File exists")) {
+			return nil
+		}
+		return fmt.Errorf("%w: %s", err, out)
+	}
+	return nil
 }

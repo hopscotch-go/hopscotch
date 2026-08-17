@@ -42,21 +42,24 @@ type Config struct {
 	Socks      string // local SOCKS5 listen addr (implies Userspace), e.g. 127.0.0.1:1080
 	HTTPPort   int    // if >0, serve a tiny HTTP banner on this overlay TCP port (implies Userspace)
 	Gateway    bool   // this TUN owns fd00::/8 and overlay DNS for the host
+	Exit       bool   // advertise as exit node and SNAT internet traffic
+	ExitNode   string // overlay name of exit to use (installs host defaults)
 	NoListen   bool   // if true, do not bind (pure dial-only; cannot be dialed back)
 	LogOverlay bool   // log every overlay nextHop forward
 	Log        *log.Logger
 }
 
 type session struct {
-	id      identity.NodeID
-	names   []string
-	addr    string
-	conn    *quic.Conn
-	stream  *quic.Stream
-	uniQ    chan []byte // overlay packets that did not fit a datagram
-	writeMu sync.Mutex
-	pendMu  sync.Mutex
-	pending map[uint64]chan proto.Message
+	id         identity.NodeID
+	names      []string
+	addr       string
+	conn       *quic.Conn
+	stream     *quic.Stream
+	uniQ       chan []byte // overlay packets that did not fit a datagram
+	writeMu    sync.Mutex
+	pendMu     sync.Mutex
+	pending    map[uint64]chan proto.Message
+	underlayIP net.IP // host-route pin so exit /1 does not capture QUIC
 }
 
 type Node struct {
@@ -98,6 +101,15 @@ type Node struct {
 
 	routeMu sync.Mutex
 	routes  map[string]ribEntry // ULA string → next hop NodeID + metric
+
+	exitMu             sync.Mutex
+	exitULA            net.IP // resolved exit_node ULA (client)
+	exitRevert         func() error // Linux nft NAT teardown
+	exitDefaultsRevert func() error // host /1+/1 teardown
+	exitDefaultsTimer  *time.Timer  // delayed DOWN on path blips
+	exitResolving      bool
+	exitClients        map[string]net.IP // plumbing IPv4 string → client ULA
+	underlayPins       map[string]*underlayPin
 }
 
 // New constructs a Node from cfg without starting listeners or dials.
@@ -135,6 +147,18 @@ func New(cfg Config) (*Node, error) {
 
 	if cfg.Identity == "" || cfg.CA == "" || cfg.Cert == "" {
 		return nil, errors.New("identity, ca, and cert are required")
+	}
+	if cfg.Exit && cfg.ExitNode != "" {
+		return nil, errors.New("exit and exit_node are mutually exclusive")
+	}
+	if cfg.Exit && !cfg.Tun {
+		return nil, errors.New("exit requires tun")
+	}
+	if cfg.ExitNode != "" && !cfg.Tun {
+		return nil, errors.New("exit_node requires tun")
+	}
+	if (cfg.Exit || cfg.ExitNode != "") && !cfg.Gateway {
+		return nil, errors.New("exit/exit_node require gateway")
 	}
 
 	priv, err := identity.LoadOrCreate(cfg.Identity)
@@ -436,6 +460,8 @@ func (n *Node) Close() {
 	if st != nil {
 		st.Close()
 	}
+	n.clearExitHostDefaults()
+	n.clearUnderlayPins()
 	if t != nil {
 		_ = t.Close()
 	}
@@ -448,6 +474,13 @@ func (n *Node) Close() {
 		if n.controlPath != "" {
 			_ = os.Remove(n.controlPath)
 		}
+	}
+	n.exitMu.Lock()
+	revert := n.exitRevert
+	n.exitRevert = nil
+	n.exitMu.Unlock()
+	if revert != nil {
+		_ = revert()
 	}
 	if n.ln != nil {
 		_ = n.ln.Close()
@@ -551,6 +584,41 @@ func (n *Node) peerAddrs() []string {
 	return out
 }
 
+// underlayPinRoutes returns host routes for configured peer underlay IPs so
+// QUIC stays on the physical default gateway when exit_node steals internet.
+func (n *Node) underlayPinRoutes() []tun.PinRoute {
+	seen := make(map[string]struct{})
+	var out []tun.PinRoute
+	for _, a := range n.peerAddrs() {
+		ep, err := endpoint.Parse(a, "udp")
+		if err != nil {
+			continue
+		}
+		host, _, err := net.SplitHostPort(ep.Addr)
+		if err != nil {
+			continue
+		}
+		ip := net.ParseIP(host)
+		if ip == nil {
+			ips, err := net.LookupIP(host)
+			if err != nil || len(ips) == 0 {
+				continue
+			}
+			ip = ips[0]
+		}
+		if ip.IsLoopback() {
+			continue // stay on lo0; never pin via LAN gateway
+		}
+		key := ip.String()
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, tun.PinRoute{Dst: ip})
+	}
+	return out
+}
+
 // isSelfAddr reports whether s matches one of this node's advertised underlay addresses.
 func (n *Node) isSelfAddr(s string) bool {
 	ep, err := endpoint.Parse(s, "udp")
@@ -589,26 +657,47 @@ func (n *Node) dial(addr string) (*session, error) {
 		n.mu.Unlock()
 	}()
 
+	pinIP := underlayIPFromAddr(addr)
+	n.retainUnderlayPin(pinIP)
+	pinned := true
+	releasePin := func() {
+		if pinned {
+			n.releaseUnderlayPin(pinIP)
+			pinned = false
+		}
+	}
+
 	dialer := n.dialers[ep.Network]
 	if dialer == nil {
+		releasePin()
 		return nil, fmt.Errorf("no dialer for %s", ep.Network)
 	}
 	ctx, cancel := context.WithTimeout(n.ctx, 8*time.Second)
 	defer cancel()
 	sess, err := dialer.Dial(ctx, ep.Addr)
 	if err != nil {
+		releasePin()
 		return nil, err
 	}
 	n.mux.Attach(sess)
 	conn, err := n.tr.Dial(ctx, sess.RemoteAddr(), n.clientTLS(endpoint.Host(ep.Addr)), n.quicConf)
 	if err != nil {
 		_ = sess.Close()
+		releasePin()
 		return nil, err
 	}
 	n.mu.Lock()
 	expect := n.pinByAddr[addr]
 	n.mu.Unlock()
-	return n.establish(conn, true, expect, addr)
+	out, err := n.establish(conn, true, expect, addr)
+	if err != nil {
+		releasePin()
+		return nil, err
+	}
+	// Pin lifetime is owned by the session now.
+	pinned = false
+	out.underlayIP = pinIP
+	return out, nil
 }
 
 // waitSessionByAddr waits briefly for another dial to finish establishing addr.
@@ -661,7 +750,7 @@ func (n *Node) establish(conn *quic.Conn, weDialed bool, expect ed25519.PublicKe
 
 	if err := proto.Write(stream, proto.Message{
 		Type:  "hello",
-		Hello: &proto.Hello{Listen: n.advertise},
+		Hello: &proto.Hello{Listen: n.advertise, Exit: n.cfg.Exit},
 	}); err != nil {
 		return nil, err
 	}
@@ -682,14 +771,22 @@ func (n *Node) establish(conn *quic.Conn, weDialed bool, expect ed25519.PublicKe
 	}
 
 	peerNames := n.peerNamesFromConn(conn)
+	var pinIP net.IP
+	if weDialed {
+		pinIP = underlayIPFromAddr(dialed)
+	} else {
+		pinIP = underlayIPFromNetAddr(conn.RemoteAddr())
+		n.retainUnderlayPin(pinIP)
+	}
 	sess := &session{
-		id:      pid,
-		names:   peerNames,
-		addr:    sessAddr,
-		conn:    conn,
-		stream:  stream,
-		uniQ:    make(chan []byte, 64),
-		pending: make(map[uint64]chan proto.Message),
+		id:         pid,
+		names:      peerNames,
+		addr:       sessAddr,
+		conn:       conn,
+		stream:     stream,
+		uniQ:       make(chan []byte, 64),
+		pending:    make(map[uint64]chan proto.Message),
+		underlayIP: pinIP,
 	}
 
 	// Prefer the newest connection for a NodeID. A peer restart (or NAT remap)
@@ -707,6 +804,7 @@ func (n *Node) establish(conn *quic.Conn, weDialed bool, expect ed25519.PublicKe
 		if old.conn != nil {
 			_ = old.conn.CloseWithError(0, "replaced")
 		}
+		n.releaseUnderlayPin(old.underlayIP)
 		n.log.Printf("replacing session %s", peerLabel(pid, peerNames))
 	}
 
@@ -788,7 +886,11 @@ func (n *Node) maintainLoop() {
 		case <-n.ctx.Done():
 			return
 		case <-routes.C:
+			n.expireStaleRoutes()
 			n.advertiseRoutes()
+			if n.cfg.ExitNode != "" {
+				n.syncExitHostDefaults()
+			}
 		case <-status.C:
 			n.logStatus()
 		}

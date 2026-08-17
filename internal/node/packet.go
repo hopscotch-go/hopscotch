@@ -31,7 +31,9 @@ const (
 	tcpOptMSS          = 2
 	tcpHeaderMin       = 20
 	dnsPort            = 53
-	tcpMSS             = tun.MTU - ipv6HeaderLen - tcpHeaderMin // 1220
+	tcpMSS      = tun.MTU - ipv6HeaderLen - tcpHeaderMin // 1220
+	overlayMax  = tun.MTU + ipv6HeaderLen                // mesh IPv6 + inner IP
+	innerTCPMSS = tun.MTU - ipv6HeaderLen - 20 - tcpHeaderMin
 )
 
 // startTun opens a gateway TUN and optional local DNS for host overlay traffic.
@@ -51,9 +53,11 @@ func (n *Node) startTun() error {
 		dnsPort = port
 	}
 	d, err := tun.Setup(tun.Opts{
-		IP:      n.id.ULA(),
-		Gateway: true,
-		DNSPort: dnsPort,
+		IP:         n.id.ULA(),
+		Gateway:    true,
+		DNSPort:    dnsPort,
+		PlumbingIP: PlumbingIPv4(n.id.ULA()),
+		Exit:       n.cfg.Exit,
 	})
 	if err != nil {
 		if n.dnsPC != nil {
@@ -65,6 +69,23 @@ func (n *Node) startTun() error {
 	n.attachTunLocked(d)
 	n.log.Printf("tun       %s  %s/128  host overlay (fd00::/8, DNS %s search %s)",
 		d.Name(), n.id.ULA(), identity.ResolverULA(), identity.NameURIScheme)
+	if n.cfg.ExitNode != "" {
+		n.log.Printf("exit_node %s  waiting for mesh path before host defaults (plumbing %s)",
+			n.cfg.ExitNode, PlumbingIPv4(n.id.ULA()))
+		n.syncExitHostDefaults()
+	}
+	if n.cfg.Exit {
+		revert, err := n.setupExitNAT(d.Name())
+		if err != nil {
+			_ = d.Close()
+			n.tun = nil
+			return fmt.Errorf("exit nat: %w", err)
+		}
+		n.exitMu.Lock()
+		n.exitRevert = revert
+		n.exitMu.Unlock()
+		n.log.Printf("exit      advertising ::/0 and 0.0.0.0/0 (SNAT via %s)", d.Name())
+	}
 	if n.dnsPC != nil {
 		n.log.Printf("dns       %s  (/etc/resolver)", n.dnsPC.LocalAddr())
 	}
@@ -100,6 +121,9 @@ func (n *Node) tunLoop() {
 		if err != nil {
 			return
 		}
+		if n.cfg.Exit && n.handleExitTUNIngress(pkt) {
+			continue
+		}
 		n.handlePacket(nil, pkt)
 	}
 }
@@ -117,18 +141,63 @@ func (n *Node) deliverTun(pkt []byte) {
 	_ = d.WritePacket(pkt)
 }
 
-// handlePacket accepts an overlay IPv6 packet from TUN or a peer session.
+// handlePacket accepts an overlay or TUN packet (IPv4/IPv6) from TUN or a peer.
 func (n *Node) handlePacket(from *session, pkt []byte) {
-	if len(pkt) == 0 || pkt[0]>>4 != 6 {
+	if len(pkt) == 0 {
 		return
 	}
-	n.handleIPv6(from, pkt)
+	ver := pkt[0] >> 4
+	switch ver {
+	case 4:
+		n.handleExitFromTUN(from, pkt)
+	case 6:
+		n.handleIPv6(from, pkt)
+	}
 }
 
-// handleIPv6 routes overlay IPv6: local delivery, DNS, or RIB next-hop forward.
+// handleExitFromTUN encapsulates a non-mesh packet toward the selected exit.
+func (n *Node) handleExitFromTUN(from *session, pkt []byte) {
+	if from != nil {
+		return // peers should send encapsulated IPv6 only
+	}
+	exitULA := n.resolvedExitULA()
+	if exitULA == nil {
+		return
+	}
+	pkt = clampInnerTCPMSS(pkt, innerTCPMSS)
+	outer := encapsulateExit(n.id.ULA(), exitULA, pkt)
+	if outer == nil {
+		return
+	}
+	n.handleIPv6(nil, outer)
+}
+
+// handleIPv6 routes overlay IPv6: local delivery, DNS, exit tunnel, or RIB forward.
 func (n *Node) handleIPv6(from *session, pkt []byte) {
 	dst, hop, ok := parseIPv6(pkt)
-	if !ok || !identity.IsMeshULA(dst) {
+	if !ok {
+		return
+	}
+
+	// Exit / client tunnel terminate: outer mesh ULA + inner internet packet.
+	if dst.Equal(n.id.ULA()) {
+		if clientULA, inner, ok := decapsulateExit(pkt, n.id.ULA()); ok {
+			if n.cfg.Exit {
+				n.egressExit(clientULA, inner)
+				return
+			}
+			if n.cfg.ExitNode != "" {
+				n.deliverTunRaw(inner)
+				return
+			}
+		}
+	}
+
+	if !identity.IsMeshULA(dst) {
+		// Non-mesh IPv6 from local TUN → encapsulate toward exit.
+		if from == nil && n.cfg.ExitNode != "" {
+			n.handleExitFromTUN(nil, pkt)
+		}
 		return
 	}
 	if identity.IsResolverULA(dst) {
@@ -198,6 +267,45 @@ func (n *Node) handleIPv6(from *session, pkt []byte) {
 			n.log.Printf("overlay send %s: %v", dst, err)
 		}
 	}
+}
+
+// deliverTunRaw writes a raw IPv4/IPv6 packet to the local TUN (exit return path).
+func (n *Node) deliverTunRaw(pkt []byte) {
+	n.tapPacket(pkt)
+	n.mu.Lock()
+	d := n.tun
+	n.mu.Unlock()
+	if d == nil {
+		return
+	}
+	_ = d.WritePacket(pkt)
+}
+
+// resolvedExitULA returns the configured exit node's ULA, resolving by name if needed.
+func (n *Node) resolvedExitULA() net.IP {
+	n.exitMu.Lock()
+	if n.exitULA != nil {
+		u := append(net.IP(nil), n.exitULA...)
+		n.exitMu.Unlock()
+		return u
+	}
+	n.exitMu.Unlock()
+	if n.cfg.ExitNode == "" {
+		return nil
+	}
+	name, err := identity.ParseName(n.cfg.ExitNode)
+	if err != nil {
+		return nil
+	}
+	ip := n.overlayIP(name)
+	if ip == nil {
+		return nil
+	}
+	n.exitMu.Lock()
+	n.exitULA = append(net.IP(nil), ip...)
+	n.exitMu.Unlock()
+	n.log.Printf("exit_node %s → %s", name, ip)
+	return ip
 }
 
 // listenLocalDNS binds a localhost UDP DNS socket for macOS /etc/resolver.
@@ -299,25 +407,27 @@ func (s *session) writePacket(pkt []byte) error {
 	if len(pkt) == 0 {
 		return fmt.Errorf("overlay packet length 0")
 	}
-	if len(pkt) > tun.MTU {
+	if len(pkt) > overlayMax {
 		return &quic.DatagramTooLargeError{MaxDatagramPayloadSize: int64(tun.MTU)}
 	}
-	err := s.conn.SendDatagram(pkt)
-	if err == nil {
-		return nil
-	}
-	if !datagramFallback(err) {
-		return err
+	if len(pkt) <= tun.MTU {
+		err := s.conn.SendDatagram(pkt)
+		if err == nil {
+			return nil
+		}
+		if !datagramFallback(err) {
+			return err
+		}
 	}
 	if s.uniQ == nil {
-		return err
+		return fmt.Errorf("overlay packet length %d: no stream fallback", len(pkt))
 	}
 	buf := append([]byte(nil), pkt...)
 	select {
 	case s.uniQ <- buf:
 		return nil
 	default:
-		return err
+		return &quic.DatagramTooLargeError{MaxDatagramPayloadSize: int64(tun.MTU)}
 	}
 }
 
@@ -370,8 +480,8 @@ func (n *Node) readUniStreamLoop(s *session) {
 
 // readUniPacket reads one overlay packet from a uni-stream and handles it.
 func (n *Node) readUniPacket(s *session, st *quic.ReceiveStream) {
-	pkt, err := io.ReadAll(io.LimitReader(st, int64(tun.MTU)+1))
-	if err != nil || len(pkt) < ipv6HeaderLen || len(pkt) > tun.MTU {
+	pkt, err := io.ReadAll(io.LimitReader(st, int64(overlayMax)+1))
+	if err != nil || len(pkt) < ipv6HeaderLen || len(pkt) > overlayMax {
 		return
 	}
 	n.handlePacket(s, pkt)
@@ -441,6 +551,98 @@ func icmpv6Error(pkt []byte, src net.IP, typ, code uint8, param uint32) []byte {
 	out[42] = byte(sum >> 8)
 	out[43] = byte(sum)
 	return out
+}
+
+// clampInnerTCPMSS caps MSS on IPv4/IPv6 TCP SYNs inside an exit tunnel.
+func clampInnerTCPMSS(pkt []byte, mss uint16) []byte {
+	if len(pkt) == 0 {
+		return pkt
+	}
+	switch pkt[0] >> 4 {
+	case 6:
+		return clampTCPMSS(pkt, mss)
+	case 4:
+		return clampIPv4TCPMSS(pkt, mss)
+	default:
+		return pkt
+	}
+}
+
+func clampIPv4TCPMSS(pkt []byte, mss uint16) []byte {
+	if len(pkt) < 20 {
+		return pkt
+	}
+	ihl := int(pkt[0]&0x0f) * 4
+	if ihl < 20 || ihl+tcpHeaderMin > len(pkt) || pkt[9] != nextHeaderTCP {
+		return pkt
+	}
+	if pkt[ihl+13]&tcpFlagSYN == 0 {
+		return pkt
+	}
+	doff := int(pkt[ihl+12]>>4) * 4
+	if doff < tcpHeaderMin || ihl+doff > len(pkt) {
+		return pkt
+	}
+	changed := false
+	i := ihl + tcpHeaderMin
+	end := ihl + doff
+	for i < end {
+		kind := pkt[i]
+		if kind == 0 {
+			break
+		}
+		if kind == 1 {
+			i++
+			continue
+		}
+		if i+1 >= end {
+			break
+		}
+		l := int(pkt[i+1])
+		if l < 2 || i+l > end {
+			break
+		}
+		if kind == tcpOptMSS && l == 4 {
+			old := binary.BigEndian.Uint16(pkt[i+2 : i+4])
+			if old > mss {
+				if !changed {
+					pkt = append([]byte(nil), pkt...)
+					changed = true
+				}
+				binary.BigEndian.PutUint16(pkt[i+2:i+4], mss)
+			}
+		}
+		i += l
+	}
+	if changed {
+		pkt[ihl+16], pkt[ihl+17] = 0, 0
+		sum := ipv4TCPChecksum(pkt, ihl)
+		pkt[ihl+16] = byte(sum >> 8)
+		pkt[ihl+17] = byte(sum)
+	}
+	return pkt
+}
+
+func ipv4TCPChecksum(pkt []byte, ihl int) uint16 {
+	var sum uint32
+	sum += uint32(pkt[12])<<8 | uint32(pkt[13])
+	sum += uint32(pkt[14])<<8 | uint32(pkt[15])
+	sum += uint32(pkt[16])<<8 | uint32(pkt[17])
+	sum += uint32(pkt[18])<<8 | uint32(pkt[19])
+	sum += uint32(nextHeaderTCP)
+	tcpLen := uint32(len(pkt) - ihl)
+	sum += tcpLen >> 16
+	sum += tcpLen & 0xffff
+	for i := ihl; i+1 < len(pkt); i += 2 {
+		sum += uint32(pkt[i])<<8 | uint32(pkt[i+1])
+	}
+	if (len(pkt)-ihl)%2 == 1 {
+		sum += uint32(pkt[len(pkt)-1]) << 8
+	}
+	for sum > 0xffff {
+		sum = (sum & 0xffff) + (sum >> 16)
+	}
+	return ^uint16(sum)
 }
 
 // clampTCPMSS caps TCP MSS options on SYN so segments fit overlay MTU.

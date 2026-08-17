@@ -44,6 +44,12 @@ Every node needs a CA-signed certificate. Self-signed peers are rejected.
   hopscotch ula --config examples/hub/foo.yaml
   hopscotch ula --config examples/hub/foo.yaml baz
 
+Exit nodes (Tailscale-like): --exit advertises SNAT egress; --exit-node=name
+installs host /1+/1 defaults via TUN toward that mesh name (pins underlay peers).
+
+  sudo ./hopscotch --config examples/hub/baz.yaml --tun --exit
+  sudo ./hopscotch --config examples/hub/foo.yaml --tun --exit-node=baz
+
 With --tun (needs root), one node is the host overlay NIC (fd00::/8
 and overlay DNS). Then ping6 of a connected peer name works.
 
@@ -119,6 +125,8 @@ func main() {
 	userspaceFlag := flag.Bool("userspace", false, "gVisor userspace IPv6 stack (DialTCP/ListenTCP; no root)")
 	socksFlag := flag.String("socks", "", "local SOCKS5 listen address (implies userspace), e.g. 127.0.0.1:1080")
 	httpFlag := flag.Int("http", 0, "serve a tiny HTTP banner on this overlay TCP port (implies userspace)")
+	exitFlag := flag.Bool("exit", false, "advertise as an exit node (SNAT internet traffic; requires --tun)")
+	exitNodeFlag := flag.String("exit-node", "", "use named mesh node as exit (installs host defaults; requires --tun)")
 	gwFlag := flag.Bool("gateway", true, "this TUN is the host overlay NIC (fd00::/8 and overlay DNS); -gateway=false for extra nodes on the same machine")
 	flag.Usage = usage
 	flag.Parse()
@@ -142,6 +150,12 @@ func main() {
 	}
 	if *httpFlag > 0 {
 		ncfg.HTTPPort = *httpFlag
+	}
+	if *exitFlag {
+		ncfg.Exit = true
+	}
+	if *exitNodeFlag != "" {
+		ncfg.ExitNode = *exitNodeFlag
 	}
 	gatewayOnCmdline := false
 	flag.Visit(func(f *flag.Flag) {
@@ -190,6 +204,8 @@ func nodeConfigFromFlags(configPath string, listens []string, peersFile, idFile,
 			Userspace: f.Userspace,
 			Socks:     f.Socks,
 			Gateway:   f.Gateway,
+			Exit:      f.Exit,
+			ExitNode:  f.ExitNode,
 			Log:       log.Default(),
 		}, nil
 	}
