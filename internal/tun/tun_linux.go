@@ -3,14 +3,11 @@
 package tun
 
 import (
-	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
-	"strings"
 	"syscall"
 	"unsafe"
 
@@ -127,10 +124,10 @@ func installDefaultRoutes(ifName string, pins []PinRoute) (func() error, error) 
 	}
 	gw4 := physicalGateway(false)
 	gw6 := physicalGateway(true)
-	_ = ipCmd("route", "del", "127.0.0.1/32")
-	_ = ipCmd("-6", "route", "del", "::1/128")
+	_ = nlRouteDelete(routeSpec{family: unix.AF_INET, dst: net.IPv4(127, 0, 0, 1), ones: 32})
+	_ = nlRouteDelete(routeSpec{family: unix.AF_INET6, dst: net.IPv6loopback, ones: 128})
 
-	var pinned [][]string // ip args after "route del" / "-6 route del"
+	var pinned []routeSpec
 	for _, p := range pins {
 		dst := p.Dst
 		if dst == nil || isLoopbackIP(dst) {
@@ -144,12 +141,12 @@ func installDefaultRoutes(ifName string, pins []PinRoute) (func() error, error) 
 			if gw == nil || gw.To4() == nil {
 				continue
 			}
-			args := []string{"route", "replace", ip4.String() + "/32", "via", gw.To4().String()}
-			if err := ipCmd(args...); err != nil {
-				_ = revertIPRoutes(pinned)
+			spec := routeSpec{family: unix.AF_INET, dst: ip4, ones: 32, gw: gw.To4()}
+			if err := nlRouteReplace(spec); err != nil {
+				_ = revertRoutes(pinned)
 				return nil, fmt.Errorf("tun pin %s: %w", ip4, err)
 			}
-			pinned = append(pinned, []string{"route", "del", ip4.String() + "/32"})
+			pinned = append(pinned, spec)
 			continue
 		}
 		ip6 := dst.To16()
@@ -163,54 +160,44 @@ func installDefaultRoutes(ifName string, pins []PinRoute) (func() error, error) 
 		if gw == nil || gw.To16() == nil || gw.To4() != nil {
 			continue
 		}
-		args := []string{"-6", "route", "replace", ip6.String() + "/128", "via", gw.String()}
-		if err := ipCmd(args...); err != nil {
-			_ = revertIPRoutes(pinned)
+		spec := routeSpec{family: unix.AF_INET6, dst: ip6, ones: 128, gw: gw}
+		if err := nlRouteReplace(spec); err != nil {
+			_ = revertRoutes(pinned)
 			return nil, fmt.Errorf("tun pin %s: %w", ip6, err)
 		}
-		pinned = append(pinned, []string{"-6", "route", "del", ip6.String() + "/128"})
+		pinned = append(pinned, spec)
 	}
 
-	splits := [][]string{
-		{"route", "replace", "0.0.0.0/1", "dev", ifName},
-		{"route", "replace", "128.0.0.0/1", "dev", ifName},
-		{"-6", "route", "replace", "::/1", "dev", ifName},
-		{"-6", "route", "replace", "8000::/1", "dev", ifName},
+	oif, err := ifIndex(ifName)
+	if err != nil {
+		_ = revertRoutes(pinned)
+		return nil, err
 	}
-	var added [][]string
-	for _, args := range splits {
-		if err := ipCmd(args...); err != nil {
-			_ = revertIPRoutes(added)
-			_ = revertIPRoutes(pinned)
-			return nil, fmt.Errorf("tun default %v: %w", args, err)
+	splits := []routeSpec{
+		{family: unix.AF_INET, dst: net.IPv4(0, 0, 0, 0), ones: 1, oif: oif},
+		{family: unix.AF_INET, dst: net.IPv4(128, 0, 0, 0), ones: 1, oif: oif},
+		{family: unix.AF_INET6, dst: make(net.IP, 16), ones: 1, oif: oif},
+		{family: unix.AF_INET6, dst: net.ParseIP("8000::"), ones: 1, oif: oif},
+	}
+	var added []routeSpec
+	for _, spec := range splits {
+		if err := nlRouteReplace(spec); err != nil {
+			_ = revertRoutes(added)
+			_ = revertRoutes(pinned)
+			return nil, fmt.Errorf("tun default %s/%d: %w", spec.dst, spec.ones, err)
 		}
-		del := append([]string{}, args...)
-		for i, a := range del {
-			if a == "replace" {
-				del[i] = "del"
-				break
-			}
-		}
-		added = append(added, del)
+		added = append(added, spec)
 	}
 	return func() error {
-		_ = revertIPRoutes(added)
-		return revertIPRoutes(pinned)
+		_ = revertRoutes(added)
+		return revertRoutes(pinned)
 	}, nil
 }
 
-func ipCmd(args ...string) error {
-	out, err := exec.Command("ip", args...).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%w: %s", err, bytes.TrimSpace(out))
-	}
-	return nil
-}
-
-func revertIPRoutes(cmds [][]string) error {
+func revertRoutes(specs []routeSpec) error {
 	var first error
-	for i := len(cmds) - 1; i >= 0; i-- {
-		if err := ipCmd(cmds[i]...); err != nil && first == nil {
+	for i := len(specs) - 1; i >= 0; i-- {
+		if err := nlRouteDelete(specs[i]); err != nil && first == nil {
 			first = err
 		}
 	}
@@ -222,48 +209,7 @@ func linuxDefaultGateway(inet6 bool) net.IP {
 }
 
 func physicalGateway(inet6 bool) net.IP {
-	args := []string{"route", "show", "default"}
-	if inet6 {
-		args = []string{"-6", "route", "show", "default"}
-	}
-	out, err := exec.Command("ip", args...).CombinedOutput()
-	if err != nil {
-		return nil
-	}
-	// Prefer a default with via <IP> on a non-hopscotch / non-tun device.
-	var fallback net.IP
-	for _, line := range strings.Split(string(out), "\n") {
-		fields := strings.Fields(line)
-		var via net.IP
-		dev := ""
-		for i := 0; i+1 < len(fields); i++ {
-			switch fields[i] {
-			case "via":
-				via = net.ParseIP(fields[i+1])
-			case "dev":
-				dev = fields[i+1]
-			}
-		}
-		if via == nil {
-			continue
-		}
-		if strings.Contains(dev, "hopscotch") || strings.HasPrefix(dev, "tun") || strings.HasPrefix(dev, "utun") {
-			continue
-		}
-		return via
-	}
-	// Fall back to first via if every default looked like a tunnel.
-	for _, line := range strings.Split(string(out), "\n") {
-		fields := strings.Fields(line)
-		for i := 0; i+1 < len(fields); i++ {
-			if fields[i] == "via" {
-				if ip := net.ParseIP(fields[i+1]); ip != nil {
-					return ip
-				}
-			}
-		}
-	}
-	return fallback
+	return physicalGatewayFromNetlink(inet6)
 }
 
 func pinHost(dst net.IP) (func() error, error) {
@@ -272,12 +218,12 @@ func pinHost(dst net.IP) (func() error, error) {
 		if gw == nil || gw.To4() == nil {
 			return nil, fmt.Errorf("tun pin %s: no physical ipv4 gateway", ip4)
 		}
-		args := []string{"route", "replace", ip4.String() + "/32", "via", gw.To4().String()}
-		if err := ipCmd(args...); err != nil {
+		spec := routeSpec{family: unix.AF_INET, dst: ip4, ones: 32, gw: gw.To4()}
+		if err := nlRouteReplace(spec); err != nil {
 			return nil, err
 		}
 		return func() error {
-			return ipCmd("route", "del", ip4.String()+"/32")
+			return nlRouteDelete(spec)
 		}, nil
 	}
 	ip6 := dst.To16()
@@ -288,11 +234,12 @@ func pinHost(dst net.IP) (func() error, error) {
 	if gw == nil || gw.To4() != nil {
 		return nil, fmt.Errorf("tun pin %s: no physical ipv6 gateway", ip6)
 	}
-	if err := ipCmd("-6", "route", "replace", ip6.String()+"/128", "via", gw.String()); err != nil {
+	spec := routeSpec{family: unix.AF_INET6, dst: ip6, ones: 128, gw: gw}
+	if err := nlRouteReplace(spec); err != nil {
 		return nil, err
 	}
 	return func() error {
-		return ipCmd("-6", "route", "del", ip6.String()+"/128")
+		return nlRouteDelete(spec)
 	}, nil
 }
 

@@ -3,9 +3,12 @@
 package tun
 
 import (
-	"context"
-	"os/exec"
-	"time"
+	"github.com/godbus/dbus/v5"
+)
+
+const (
+	firewalldBus  = "org.fedoraproject.FirewallD1"
+	firewalldPath = "/org/fedoraproject/FirewallD1"
 )
 
 // gatewayNetFilter puts the TUN in firewalld's trusted zone so INPUT on
@@ -14,18 +17,38 @@ func gatewayNetFilter(ifName string) func() error {
 	if !safeIfName(ifName) {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err := exec.CommandContext(ctx, "firewall-cmd", "--state").Run(); err != nil {
+	if !firewalldRunning() {
 		return nil
 	}
-	if err := exec.CommandContext(ctx, "firewall-cmd", "--zone=trusted", "--add-interface="+ifName).Run(); err != nil {
+	if err := firewalldSetZone(ifName, "trusted"); err != nil {
 		return nil
 	}
 	return func() error {
-		c, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		_ = exec.CommandContext(c, "firewall-cmd", "--zone=trusted", "--remove-interface="+ifName).Run()
+		_ = firewalldSetZone(ifName, "")
 		return nil
 	}
+}
+
+func firewalldRunning() bool {
+	conn, err := dbus.ConnectSystemBus()
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+	obj := conn.Object(firewalldBus, dbus.ObjectPath(firewalldPath))
+	var state string
+	if err := obj.Call(firewalldBus+".getState", 0).Store(&state); err != nil {
+		return false
+	}
+	return state == "RUNNING"
+}
+
+func firewalldSetZone(iface, zone string) error {
+	conn, err := dbus.ConnectSystemBus()
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	obj := conn.Object(firewalldBus, dbus.ObjectPath(firewalldPath))
+	return obj.Call(firewalldBus+".zone.changeZoneOfInterface", 0, iface, zone).Err
 }

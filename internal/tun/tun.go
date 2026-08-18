@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"syscall"
 )
 
@@ -43,6 +44,14 @@ func isLoopbackIP(ip net.IP) bool {
 		return false
 	}
 	return ip.IsLoopback()
+}
+
+// skipTunnelDev reports whether a route should be ignored when picking the
+// physical default gateway (hopscotch TUN and other tunnels).
+func skipTunnelDev(name string) bool {
+	return strings.Contains(name, "hopscotch") ||
+		strings.HasPrefix(name, "tun") ||
+		strings.HasPrefix(name, "utun")
 }
 
 // Setup opens a TUN device, configures addressing/routing, and optionally

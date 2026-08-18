@@ -4,9 +4,14 @@ package node
 
 import (
 	"fmt"
-	"os/exec"
+	"os"
 	"strings"
+
+	"github.com/google/nftables"
+	"github.com/google/nftables/expr"
 )
+
+const exitNFTTable = "hopscotch_exit"
 
 // writeExitEgress injects a packet into the TUN so the kernel can forward/SNAT it.
 func (n *Node) writeExitEgress(inner []byte) error {
@@ -26,63 +31,171 @@ func (n *Node) setupExitNAT(ifName string) (func() error, error) {
 	if !safeExitIfName(ifName) {
 		return nil, fmt.Errorf("exit nat: bad ifname %q", ifName)
 	}
-	for _, args := range [][]string{
-		{"sysctl", "-w", "net.ipv4.ip_forward=1"},
-		{"sysctl", "-w", "net.ipv4.conf.all.forwarding=1"},
-		{"sysctl", "-w", "net.ipv6.conf.all.forwarding=1"},
-		{"sysctl", "-w", "net.ipv4.conf.all.rp_filter=0"},
-		{"sysctl", "-w", "net.ipv4.conf." + ifName + ".rp_filter=0"},
+	for _, kv := range []struct {
+		key string
+		val string
+	}{
+		{"net.ipv4.ip_forward", "1"},
+		{"net.ipv4.conf.all.forwarding", "1"},
+		{"net.ipv6.conf.all.forwarding", "1"},
+		{"net.ipv4.conf.all.rp_filter", "0"},
+		{"net.ipv4.conf." + ifName + ".rp_filter", "0"},
 	} {
-		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
-			// rp_filter on a missing iface name is non-fatal
-			if strings.Contains(args[len(args)-1], "rp_filter") {
+		if err := sysctlSet(kv.key, kv.val); err != nil {
+			if strings.Contains(kv.key, "rp_filter") {
 				continue
 			}
-			return nil, fmt.Errorf("exit nat %v: %w (%s)", args, err, out)
+			return nil, fmt.Errorf("exit nat %s=%s: %w", kv.key, kv.val, err)
 		}
 	}
-	_ = exec.Command("nft", "delete", "table", "inet", "hopscotch_exit").Run()
-	script := fmt.Sprintf(`table inet hopscotch_exit {
-	chain postrouting {
-		type nat hook postrouting priority 100;
-		oifname != "%s" masquerade
+	if err := deleteExitNFTTable(); err != nil {
+		return nil, fmt.Errorf("exit nat nft reset: %w", err)
 	}
-	chain forward {
-		type filter hook forward priority -150;
-		iifname "%s" accept
-		oifname "%s" accept
+	if err := installExitNFT(ifName); err != nil {
+		return nil, err
 	}
-}
-`, ifName, ifName, ifName)
-	cmd := exec.Command("nft", "-f", "-")
-	cmd.Stdin = strings.NewReader(script)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("exit nat nft: %w (%s)", err, out)
+	fwdRules, err := insertFilterForward(ifName)
+	if err != nil {
+		_ = deleteExitNFTTable()
+		return nil, err
 	}
-
-	// iptables/ip6tables DROP policies still drop even when nft accepts.
-	iptablesInsertForward(ifName)
 
 	n.log.Printf("exit      nat inet hopscotch_exit masquerade + forward (oif != %s)", ifName)
 	return func() error {
-		iptablesDeleteForward(ifName)
-		_ = exec.Command("nft", "delete", "table", "inet", "hopscotch_exit").Run()
-		return nil
+		if err := deleteFilterForward(fwdRules); err != nil {
+			return err
+		}
+		return deleteExitNFTTable()
 	}, nil
 }
 
-func iptablesInsertForward(ifName string) {
-	for _, bin := range []string{"iptables", "ip6tables"} {
-		_ = exec.Command(bin, "-I", "FORWARD", "1", "-i", ifName, "-j", "ACCEPT").Run()
-		_ = exec.Command(bin, "-I", "FORWARD", "1", "-o", ifName, "-j", "ACCEPT").Run()
-	}
+func sysctlSet(key, val string) error {
+	path := "/proc/sys/" + strings.ReplaceAll(key, ".", "/")
+	return os.WriteFile(path, []byte(val+"\n"), 0)
 }
 
-func iptablesDeleteForward(ifName string) {
-	for _, bin := range []string{"iptables", "ip6tables"} {
-		_ = exec.Command(bin, "-D", "FORWARD", "-i", ifName, "-j", "ACCEPT").Run()
-		_ = exec.Command(bin, "-D", "FORWARD", "-o", ifName, "-j", "ACCEPT").Run()
+func installExitNFT(ifName string) error {
+	conn, err := nftables.New()
+	if err != nil {
+		return fmt.Errorf("exit nat nft conn: %w", err)
 	}
+	table := conn.AddTable(&nftables.Table{
+		Family: nftables.TableFamilyINet,
+		Name:   exitNFTTable,
+	})
+	natChain := conn.AddChain(&nftables.Chain{
+		Name:     "postrouting",
+		Table:    table,
+		Type:     nftables.ChainTypeNAT,
+		Hooknum:  nftables.ChainHookPostrouting,
+		Priority: nftables.ChainPriorityNATSource,
+	})
+	fwdChain := conn.AddChain(&nftables.Chain{
+		Name:     "forward",
+		Table:    table,
+		Type:     nftables.ChainTypeFilter,
+		Hooknum:  nftables.ChainHookForward,
+		Priority: nftables.ChainPriorityRef(-150),
+	})
+	ifNameData := append([]byte(ifName), 0)
+	conn.AddRule(&nftables.Rule{
+		Table: table,
+		Chain: natChain,
+		Exprs: []expr.Any{
+			&expr.Meta{Key: expr.MetaKeyOIFNAME, Register: 1},
+			&expr.Cmp{
+				Op:       expr.CmpOpNeq,
+				Register: 1,
+				Data:     ifNameData,
+			},
+			&expr.Masq{},
+		},
+	})
+	for _, key := range []expr.MetaKey{expr.MetaKeyIIFNAME, expr.MetaKeyOIFNAME} {
+		conn.AddRule(&nftables.Rule{
+			Table: table,
+			Chain: fwdChain,
+			Exprs: []expr.Any{
+				&expr.Meta{Key: key, Register: 1},
+				&expr.Cmp{
+					Op:       expr.CmpOpEq,
+					Register: 1,
+					Data:     ifNameData,
+				},
+				&expr.Verdict{Kind: expr.VerdictAccept},
+			},
+		})
+	}
+	if err := conn.Flush(); err != nil {
+		return fmt.Errorf("exit nat nft: %w", err)
+	}
+	return nil
+}
+
+func deleteExitNFTTable() error {
+	conn, err := nftables.New()
+	if err != nil {
+		return err
+	}
+	tables, err := conn.ListTables()
+	if err != nil {
+		return err
+	}
+	for _, t := range tables {
+		if t.Family == nftables.TableFamilyINet && t.Name == exitNFTTable {
+			conn.DelTable(t)
+		}
+	}
+	return conn.Flush()
+}
+
+func insertFilterForward(ifName string) ([]*nftables.Rule, error) {
+	ifNameData := append([]byte(ifName), 0)
+	var rules []*nftables.Rule
+	for _, family := range []nftables.TableFamily{nftables.TableFamilyIPv4, nftables.TableFamilyIPv6} {
+		conn, err := nftables.New()
+		if err != nil {
+			deleteFilterForward(rules)
+			return nil, err
+		}
+		table := &nftables.Table{Family: family, Name: "filter"}
+		chain := &nftables.Chain{Name: "FORWARD", Table: table}
+		for _, key := range []expr.MetaKey{expr.MetaKeyIIFNAME, expr.MetaKeyOIFNAME} {
+			rule := conn.InsertRule(&nftables.Rule{
+				Table: table,
+				Chain: chain,
+				Exprs: []expr.Any{
+					&expr.Meta{Key: key, Register: 1},
+					&expr.Cmp{
+						Op:       expr.CmpOpEq,
+						Register: 1,
+						Data:     ifNameData,
+					},
+					&expr.Verdict{Kind: expr.VerdictAccept},
+				},
+			})
+			rules = append(rules, rule)
+		}
+		if err := conn.Flush(); err != nil {
+			deleteFilterForward(rules)
+			return nil, err
+		}
+	}
+	return rules, nil
+}
+
+func deleteFilterForward(rules []*nftables.Rule) error {
+	if len(rules) == 0 {
+		return nil
+	}
+	conn, err := nftables.New()
+	if err != nil {
+		return err
+	}
+	for i := len(rules) - 1; i >= 0; i-- {
+		conn.DelRule(rules[i])
+	}
+	return conn.Flush()
 }
 
 func safeExitIfName(name string) bool {

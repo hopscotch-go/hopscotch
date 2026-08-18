@@ -3,14 +3,11 @@
 package tun
 
 import (
-	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
-	"strings"
 	"unsafe"
 
 	"golang.org/x/net/route"
@@ -164,15 +161,13 @@ func installDefaultRoutes(ifName string, pins []PinRoute) (func() error, error) 
 	}
 	gw4 := physicalGateway(false)
 	gw6 := physicalGateway(true)
-	// Clear stale loopback host pins from earlier buggy installs.
-	_ = routeCmd("delete", "-inet", "-host", "127.0.0.1")
-	_ = routeCmd("delete", "-inet6", "-host", "::1")
-	var pinned []string // args after "route -n delete"
+	_ = routeHostDel(false, net.IPv4(127, 0, 0, 1))
+	_ = routeHostDel(true, net.IPv6loopback)
+
+	var pinned []darwinRoutePin
 	for _, p := range pins {
 		dst := p.Dst
 		if dst == nil || isLoopbackIP(dst) {
-			// 127/8 must stay on lo0. Pinning 127.0.0.1 via Wi‑Fi yields
-			// "can't assign requested address" for local UDP peers.
 			continue
 		}
 		if ip4 := dst.To4(); ip4 != nil {
@@ -183,11 +178,11 @@ func installDefaultRoutes(ifName string, pins []PinRoute) (func() error, error) 
 			if gw == nil || gw.To4() == nil {
 				continue
 			}
-			if err := routeCmd("add", "-inet", "-host", ip4.String(), gw.To4().String()); err != nil {
-				_ = revertRoutePins(pinned)
+			if err := routeHostAdd(false, ip4, gw.To4()); err != nil {
+				_ = revertDarwinPins(pinned)
 				return nil, fmt.Errorf("tun pin %s: %w", ip4, err)
 			}
-			pinned = append(pinned, "-inet", "-host", ip4.String())
+			pinned = append(pinned, darwinRoutePin{host: ip4})
 			continue
 		}
 		ip6 := dst.To16()
@@ -201,62 +196,50 @@ func installDefaultRoutes(ifName string, pins []PinRoute) (func() error, error) 
 		if gw == nil || gw.To16() == nil || gw.To4() != nil {
 			continue
 		}
-		if err := routeCmd("add", "-inet6", "-host", ip6.String(), gw.String()); err != nil {
-			_ = revertRoutePins(pinned)
+		if err := routeHostAdd(true, ip6, gw); err != nil {
+			_ = revertDarwinPins(pinned)
 			return nil, fmt.Errorf("tun pin %s: %w", ip6, err)
 		}
-		pinned = append(pinned, "-inet6", "-host", ip6.String())
+		pinned = append(pinned, darwinRoutePin{inet6: true, host: ip6})
 	}
-	splits := [][]string{
-		// Darwin stores these as 0/1 and 128.0/1; use the same names on
-		// delete so Close/revert actually removes them.
-		{"-inet", "0/1", "-interface", ifName},
-		{"-inet", "128.0/1", "-interface", ifName},
-		{"-inet6", "::/1", "-interface", ifName},
-		{"-inet6", "8000::/1", "-interface", ifName},
+	splits := []darwinRouteSplit{
+		{dst: net.IPv4(0, 0, 0, 0), ones: 1},
+		{dst: net.IPv4(128, 0, 0, 0), ones: 1},
+		{inet6: true, dst: make(net.IP, 16), ones: 1},
+		{inet6: true, dst: net.ParseIP("8000::"), ones: 1},
 	}
-	var added [][]string
-	for _, args := range splits {
-		_ = routeCmd(append([]string{"delete"}, args[:2]...)...) // dest only; ignore missing
-		if err := routeCmd(append([]string{"add"}, args...)...); err != nil {
-			_ = revertSplitDefaults(added)
-			_ = revertRoutePins(pinned)
-			return nil, fmt.Errorf("tun default %s: %w", args[1], err)
+	var added []darwinRouteSplit
+	for _, spec := range splits {
+		_ = routePrefixIf(unix.RTM_DELETE, spec.inet6, spec.dst, spec.ones, ifName)
+		if err := routePrefixIf(unix.RTM_ADD, spec.inet6, spec.dst, spec.ones, ifName); err != nil {
+			_ = revertDarwinSplits(added, ifName)
+			_ = revertDarwinPins(pinned)
+			return nil, fmt.Errorf("tun default %s/%d: %w", spec.dst, spec.ones, err)
 		}
-		added = append(added, args)
+		added = append(added, spec)
 	}
 	return func() error {
-		_ = revertSplitDefaults(added)
-		return revertRoutePins(pinned)
+		_ = revertDarwinSplits(added, ifName)
+		return revertDarwinPins(pinned)
 	}, nil
 }
 
-func routeCmd(args ...string) error {
-	out, err := exec.Command("route", append([]string{"-n"}, args...)...).CombinedOutput()
-	if err != nil {
-		if bytes.Contains(out, []byte("File exists")) {
-			return nil
-		}
-		return fmt.Errorf("%w: %s", err, bytes.TrimSpace(out))
-	}
-	return nil
-}
-
-func revertSplitDefaults(added [][]string) error {
+func revertDarwinSplits(added []darwinRouteSplit, ifName string) error {
 	var first error
 	for i := len(added) - 1; i >= 0; i-- {
-		if err := routeCmd(append([]string{"delete"}, added[i]...)...); err != nil && first == nil {
+		spec := added[i]
+		if err := routePrefixIf(unix.RTM_DELETE, spec.inet6, spec.dst, spec.ones, ifName); err != nil && first == nil {
 			first = err
 		}
 	}
 	return first
 }
 
-func revertRoutePins(pinned []string) error {
-	// pinned is flat: -inet -host ip | -inet6 -host ip
+func revertDarwinPins(pinned []darwinRoutePin) error {
 	var first error
-	for i := 0; i+2 < len(pinned); i += 3 {
-		if err := routeCmd(append([]string{"delete"}, pinned[i:i+3]...)...); err != nil && first == nil {
+	for i := len(pinned) - 1; i >= 0; i-- {
+		p := pinned[i]
+		if err := routeHostDel(p.inet6, p.host); err != nil && first == nil {
 			first = err
 		}
 	}
@@ -270,57 +253,7 @@ func currentDefaultGateway(inet6 bool) net.IP {
 // physicalGateway prefers a default route with an IP next hop (en0/Wi‑Fi),
 // not link#utun / IFSCOPE defaults from hopscotch or other VPNs.
 func physicalGateway(inet6 bool) net.IP {
-	fam := "inet"
-	if inet6 {
-		fam = "inet6"
-	}
-	out, err := exec.Command("netstat", "-rn", "-f", fam).CombinedOutput()
-	if err != nil {
-		return gatewayFromRouteGet(inet6)
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 2 || fields[0] != "default" {
-			continue
-		}
-		gw := net.ParseIP(fields[1])
-		if gw == nil {
-			continue // link#N — skip interface-scoped / VPN defaults
-		}
-		if inet6 && gw.To4() != nil {
-			continue
-		}
-		if !inet6 && gw.To4() == nil {
-			continue
-		}
-		return gw
-	}
-	return gatewayFromRouteGet(inet6)
-}
-
-func gatewayFromRouteGet(inet6 bool) net.IP {
-	args := []string{"-n", "get"}
-	if inet6 {
-		args = append(args, "-inet6")
-	}
-	args = append(args, "default")
-	out, err := exec.Command("route", args...).CombinedOutput()
-	if err != nil {
-		return nil
-	}
-	for _, line := range bytes.Split(out, []byte("\n")) {
-		line = bytes.TrimSpace(line)
-		if !bytes.HasPrefix(line, []byte("gateway:")) {
-			continue
-		}
-		s := strings.TrimSpace(string(bytes.TrimPrefix(line, []byte("gateway:"))))
-		ip := net.ParseIP(s)
-		if ip == nil {
-			return nil
-		}
-		return ip
-	}
-	return nil
+	return physicalGatewayFromRIB(inet6)
 }
 
 func pinHost(dst net.IP) (func() error, error) {
@@ -329,11 +262,11 @@ func pinHost(dst net.IP) (func() error, error) {
 		if gw == nil || gw.To4() == nil {
 			return nil, fmt.Errorf("tun pin %s: no physical ipv4 gateway", ip4)
 		}
-		if err := routeCmd("add", "-inet", "-host", ip4.String(), gw.To4().String()); err != nil {
+		if err := routeHostAdd(false, ip4, gw.To4()); err != nil {
 			return nil, err
 		}
 		return func() error {
-			return routeCmd("delete", "-inet", "-host", ip4.String())
+			return routeHostDel(false, ip4)
 		}, nil
 	}
 	ip6 := dst.To16()
@@ -344,11 +277,11 @@ func pinHost(dst net.IP) (func() error, error) {
 	if gw == nil || gw.To4() != nil {
 		return nil, fmt.Errorf("tun pin %s: no physical ipv6 gateway", ip6)
 	}
-	if err := routeCmd("add", "-inet6", "-host", ip6.String(), gw.String()); err != nil {
+	if err := routeHostAdd(true, ip6, gw); err != nil {
 		return nil, err
 	}
 	return func() error {
-		return routeCmd("delete", "-inet6", "-host", ip6.String())
+		return routeHostDel(true, ip6)
 	}, nil
 }
 
@@ -444,25 +377,3 @@ func setMTU(name string, mtu int) error {
 	return unix.IoctlSetIfreqMTU(fd, &ifr)
 }
 
-func addInet4Alias(name string, ip net.IP) error {
-	ip4 := ip.To4()
-	if ip4 == nil {
-		return fmt.Errorf("not ipv4")
-	}
-	out, err := exec.Command("ifconfig", name, "inet", ip4.String(), ip4.String(), "alias").CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%w: %s", err, out)
-	}
-	return nil
-}
-
-func addInet4RouteCGNAT(name string) error {
-	out, err := exec.Command("route", "-n", "add", "-inet", "100.64.0.0/10", "-interface", name).CombinedOutput()
-	if err != nil {
-		if bytes.Contains(out, []byte("File exists")) {
-			return nil
-		}
-		return fmt.Errorf("%w: %s", err, out)
-	}
-	return nil
-}
